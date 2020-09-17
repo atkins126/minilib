@@ -91,21 +91,35 @@ type
     Timout: Integer;
   end;
 
+  { TmnHeaderField }
+
+  TmnHeaderField = class(TmnParam)
+    function GetFullString: String; override;
+  end;
+
+  { TmnHeader }
+
+  TmnHeader = class(TmnParams)
+  protected
+    constructor Create;
+    function CreateField: TmnField; override;
+  end;
+
   { TmodCommand }
 
   TmodCommand = class(TmnObject)
   private
     FModule: TmodModule;
     FRaiseExceptions: Boolean;
-    FRequestHeader: TmnParams;
-    FRespondHeader: TmnParams;
+    FRequestHeader: TmnHeader;
+    FRespondHeader: TmnHeader;
     FRequestStream: TmnBufferStream;
     FRespondStream: TmnBufferStream;
     FContentSize: Int64;
 
     FStates: TmodCommandStates;
     procedure SetModule(const Value: TmodModule); virtual;
-    procedure SetRequestHeader(const Value: TmnParams);
+    procedure SetRequestHeader(const Value: TmnHeader);
     function GetActive: Boolean;
   protected
     Request: TmodRequest;
@@ -136,8 +150,8 @@ type
     property Module: TmodModule read FModule write SetModule;
     //Lock the server listener when execute the command
     //Prepare called after created in lucking mode
-    property RequestHeader: TmnParams read FRequestHeader write SetRequestHeader;
-    property RespondHeader: TmnParams read FRespondHeader;
+    property RequestHeader: TmnHeader read FRequestHeader write SetRequestHeader;
+    property RespondHeader: TmnHeader read FRespondHeader;
     property ContentSize: Int64 read FContentSize write FContentSize; //todo
     property RaiseExceptions: Boolean read FRaiseExceptions write FRaiseExceptions default False;
     property States: TmodCommandStates read FStates;
@@ -287,16 +301,16 @@ type
     function Have(AValue: string; vSeperators: TSysCharSet = [';']): Boolean;
   end;
 
-function ParseURI(Request: string; out URIPath: UTF8String; URIParams: UTF8String): Boolean; overload;
-function ParseURI(Request: string; out URIPath: UTF8String; URIParams: TmnParams): Boolean; overload;
-procedure ParsePath(aRequest: string; out Name: string; out URIPath: UTF8String; URIParams: TmnParams);
+function ParseURI(Request: string; out URIPath: UTF8String; out URIQuery: UTF8String): Boolean; overload;
+function ParseURI(Request: string; out URIPath: UTF8String; URIQuery: TmnParams): Boolean; overload;
+procedure ParsePath(aRequest: string; out Name: string; out URIPath: UTF8String; URIQuery: TmnParams);
 
 implementation
 
 uses
   mnUtils;
 
-function ParseURI(Request: string; out URIPath: UTF8String; URIParams: UTF8String): Boolean;
+function ParseURI(Request: string; out URIPath: UTF8String; out URIQuery: UTF8String): Boolean;
 var
   I, J: Integer;
 begin
@@ -324,27 +338,52 @@ begin
   J := Pos('?', URIPath);
   if J > 0 then
   begin
-    URIParams := Copy(Request, J + 1, Length(Request));
+    URIQuery := Copy(Request, J + 1, Length(Request));
     URIPath := Copy(URIPath, 1, J - 1);
+  end
+  else
+  begin
+    URIQuery := '';
+    URIPath := '';
   end;
 end;
 
-function ParseURI(Request: string; out URIPath: UTF8String; URIParams: TmnParams): Boolean;
+function ParseURI(Request: string; out URIPath: UTF8String; URIQuery: TmnParams): Boolean;
 var
-  aParams: string;
+  aParams: utf8string;
 begin
   Result := ParseURI(Request, URIPath, aParams);
   if Result then
-    if URIParams <> nil then
+    if URIQuery <> nil then
       //ParseParams(aParams, False);
-      StrToStringsCallback(aParams, URIParams, @ParamsCallBack, ['&'], [' ']);
+      StrToStringsCallback(aParams, URIQuery, @ParamsCallBack, ['&'], [' ']);
 end;
 
-procedure ParsePath(aRequest: string; out Name: string; out URIPath: UTF8String; URIParams: TmnParams);
+procedure ParsePath(aRequest: string; out Name: string; out URIPath: UTF8String; URIQuery: TmnParams);
 begin
-  ParseURI(aRequest, URIPath, URIParams);
+  ParseURI(aRequest, URIPath, URIQuery);
   Name := SubStr(URIPath, '/', 0);
   URIPath := Copy(URIPath, Length(Name) + 1, MaxInt);
+end;
+
+{ TmnHeaderField }
+
+function TmnHeaderField.GetFullString: String;
+begin
+  Result := GetNameValue(': ');
+end;
+
+{ TmnHeader }
+
+constructor TmnHeader.Create;
+begin
+  inherited Create;
+  AutoRemove := True;
+end;
+
+function TmnHeader.CreateField: TmnField;
+begin
+  Result := TmnHeaderField.Create;
 end;
 
 { TmodModuleListener }
@@ -466,8 +505,8 @@ begin
   FRequestStream := RequestStream; //do not free
   FRespondStream := RequestStream; //do not free
 
-  FRequestHeader := TmnParams.Create;
-  FRespondHeader := TmnParams.Create;
+  FRequestHeader := TmnHeader.Create;
+  FRespondHeader := TmnHeader.Create;
 end;
 
 destructor TmodCommand.Destroy;
@@ -556,7 +595,7 @@ begin
   FModule := Value;
 end;
 
-procedure TmodCommand.SetRequestHeader(const Value: TmnParams);
+procedure TmodCommand.SetRequestHeader(const Value: TmnHeader);
 begin
   if FRequestHeader <> Value then
   begin
@@ -646,7 +685,7 @@ var
 begin
   for item in ACommand.RespondHeader do
   begin
-    s := item.GetFullString(': ');
+    s := item.GetNameValue(': ');
     //WriteLn(s);
     ACommand.RespondStream.WriteLineUTF8(S);
   end;

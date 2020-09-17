@@ -6,14 +6,14 @@ uses
   {$IFDEF UNIX}
   cthreads,
   {$ENDIF}
-  Classes, SysUtils, CustApp, zdeflate, zlib, zstream,
-  mnUtils, mnStreams, mnStreamUtils, mnSockets, mnClients, mnServers;
+  Classes, SysUtils, CustApp, zdeflate, zlib, zstream, mnUtils, mnStreams,
+  mnLogs, mnStreamUtils, mnSockets, mnClients, mnServers, mnWinSockets, IniFiles;
 
 type
 
   { ThreadSender }
 
-  TThreadSender = class(TThread)
+  TThreadSender = class(TThread) //Client
   protected
     procedure Execute; override;
   public
@@ -22,7 +22,7 @@ type
 
   { TThreadReciever }
 
-  TThreadReciever = class(TThread)
+  TThreadReciever = class(TThread) //Server
   protected
     procedure Execute; override;
   public
@@ -32,17 +32,32 @@ type
 
   TTestStream = class(TCustomApplication)
   protected
-    procedure Example1; //read write line with small buffer
-    procedure Example2; //Socket threads
-    procedure Example3; //Hex lines
-    procedure Example4; //Hex image
-    procedure Example5; //Hex image2 images and read one
-    procedure Example6; //GZ image
+    procedure InternalExampleSocket(WithServer: Boolean = True; WithClient: Boolean = True); //Socket threads
+    procedure ExampleSocket;
+    procedure ExampleSmallBuffer; //read write line with small buffer
+    procedure ExampleHexLine; //Hex lines
+    procedure ExampleHexImage; //Hex image
+    procedure ExampleCopyHexImage; //Hex image2 images and read one
+    procedure ExampleGZImage; //GZ image
     procedure DoRun; override;
   public
     constructor Create(TheOwner: TComponent); override;
     destructor Destroy; override;
   end;
+
+var
+  Application: TTestStream;
+  Address: string;
+  NoDelay: Boolean = False;
+  KeepAlive: Boolean = False;
+  QuickAck: Boolean = False;
+  SocketOptions: TmnsoOptions = [soWaitBeforeRead];
+  ini: TIniFile;
+
+const
+  sMsg: AnsiString = '0123456789';
+  sPort: string = '82';
+  sHost = '192.168.1.2';
 
 { TThreadReciever }
 
@@ -51,16 +66,26 @@ var
   Stream: TmnServerSocket;
   s: string;
 begin
-  WriteLn('Server started');
-  Stream := TmnServerSocket.Create('localhost', '82');
-  Stream.Timeout := WaitForEver;
-  Stream.Options := Stream.Options - [soWaitBeforeRead, soWaitBeforeWrite];
+  Stream := TmnServerSocket.Create(Address, sPort);
+  Stream.ReadTimeout := WaitForEver;
+  Stream.Options := SocketOptions;
+  if NoDelay then
+    Stream.Options := Stream.Options + [soNoDelay];
+  if KeepAlive then
+    Stream.Options := Stream.Options + [soKeepAlive];
+  if QuickAck then
+    Stream.Options := Stream.Options + [soQuickAck];
+
   Stream.Connect;
   try
     while true do
     begin
-      s := Trim(Stream.ReadLine);
-      WriteLn(s);
+      s := Stream.ReadLine;
+      if not Stream.Connected then
+        break;
+      if sMsg <> s then
+        raise Exception.Create('Error msg: ' + s);
+      Stream.WriteLine(sMsg);
       if not Stream.Connected then
         break;
     end;
@@ -68,6 +93,7 @@ begin
   finally
     Stream.Free;
   end;
+  WriteLn('Server end execute');
 end;
 
 { ThreadSender }
@@ -79,33 +105,44 @@ var
   i: Integer;
   t: int64;
 const
-  ACount: Integer = 2000;
+  ACount: Integer = 10000;
 begin
-  Stream := TmnClientSocket.Create('localhost', '82');
-  Stream.Timeout := WaitForEver;
-  Stream.Options := Stream.Options - [soWaitBeforeRead, soWaitBeforeWrite];
+  Stream := TmnClientSocket.Create(Address, sPort);
+  Stream.ReadTimeout := WaitForEver;
+  Stream.Options := SocketOptions;
+  if NoDelay then
+    Stream.Options := Stream.Options + [soNoDelay];
+  if KeepAlive then
+    Stream.Options := Stream.Options + [soKeepAlive];
+  if QuickAck then
+    Stream.Options := Stream.Options + [soQuickAck];
   try
+    t := GetTickCount64;
     Stream.Connect;
+    WriteLn(TicksToString(GetTickCount64 - t));
     if Stream.Connected then
     begin
-      s := '0123456789';
-      Stream.WriteLine(s);
+      for i := 0 to ACount -1 do
+      begin
+        Stream.WriteLine(sMsg);
+        Stream.ReadLine(s);
+        if sMsg <> s then
+          raise Exception.Create('Error msg: ' + s);
         if not Stream.Connected then
-          break;
-      end;
+        break;
     end;
-    t := GetTickCount64 - t;
-    WriteLn(t.ToString);
-    WriteLn(TicksToString(t));
+    end;
+    WriteLn(TicksToString(GetTickCount64 - t));
     Stream.Disconnect;
   finally
     Stream.Free;
   end;
+  WriteLn('Client end execute');
 end;
 
 { TTestStream }
 
-procedure TTestStream.Example1;
+procedure TTestStream.ExampleSmallBuffer;
 var
   Stream: TmnBufferStream;
   s: string;
@@ -132,22 +169,87 @@ begin
   end;
 end;
 
-procedure TTestStream.Example2;
+procedure TTestStream.InternalExampleSocket(WithServer: Boolean; WithClient: Boolean);
 var
   Reciever: TThreadReciever;
   Sender: TThreadSender;
 begin
-  Reciever := TThreadReciever.Create(True);
-  Reciever.Start;
-  Sleep(1000);
+  if WithServer then
+  begin
+    WriteLn('Server started');
+    Reciever := TThreadReciever.Create(True);
+    Reciever.Start;
+    Sleep(1000);
+  end;
 
-  Sender := TThreadSender.Create(True);
-  Sender.Start;
-  Sender.WaitFor;
-  Reciever.WaitFor;
+  if WithClient then
+  begin
+    WriteLn('Client started');
+    Sender := TThreadSender.Create(True);
+    Sender.Start;
+  end;
+  if WithClient then
+  begin
+    WriteLn('Waiting for client');
+    Sender.WaitFor;
+  end;
+  if WithServer then
+  begin
+    WriteLn('Waiting for server');
+    Reciever.WaitFor;
+  end;
 end;
 
-procedure TTestStream.Example3;
+function GetAnswer(Q: string; Default: Boolean = true): Boolean;
+var
+  s: string;
+begin
+  Write(Q);
+  Write(': ');
+  ReadLn(s);
+  if s = '' then
+    Result := Default
+  else if s = 'x' then
+    halt
+  else
+    Result := SameText(s, 'y');
+end;
+
+function GetAnswer(Q: string; Default: string = ''): string;
+var
+  s: string;
+begin
+  Write(Q);
+  if Default <> '' then
+    Write('(' + Default + ')');
+  Write(': ');
+  ReadLn(s);
+  if s = '' then
+    Result := Default
+  else if s = 'x' then
+    halt
+  else
+    Result := s;
+end;
+
+procedure TTestStream.ExampleSocket;
+var
+  WithServer, WithClient: boolean;
+begin
+  WithServer := GetAnswer('With Server? ', True);
+  WithClient := not WithServer or GetAnswer('With Client? ', True);
+  if WithClient and not WithServer then
+  begin
+    Address := GetAnswer('Enter IP address', Address);
+    ini.WriteString('Options', 'Address', Address);
+  end;
+  NoDelay := GetAnswer('NoDelay ? ', False);
+  KeepAlive := False;
+  QuickAck := False;
+  InternalExampleSocket(WithServer, WithClient);
+end;
+
+procedure TTestStream.ExampleHexLine;
 var
   Stream: TmnBufferStream;
   Proxy: TmnHexStreamProxy;
@@ -179,7 +281,7 @@ begin
   end;
 end;
 
-procedure TTestStream.Example4;
+procedure TTestStream.ExampleHexImage;
 var
   aImageFile: TFileStream;
   Stream: TmnBufferStream;
@@ -210,7 +312,7 @@ begin
   end;
 end;
 
-procedure TTestStream.Example5;
+procedure TTestStream.ExampleCopyHexImage;
 var
   aImageFile: TFileStream;
   Stream: TmnBufferStream;
@@ -248,7 +350,7 @@ begin
   end;
 end;
 
-procedure TTestStream.Example6;
+procedure TTestStream.ExampleGZImage;
 var
   aImageFile: TFileStream;
   Stream: TmnBufferStream;
@@ -300,10 +402,57 @@ begin
   inherited Destroy;
 end;
 
+type
+  TProcedureObject = procedure of object;
+
 procedure TTestStream.DoRun;
+var
+  s: string;
+  n: Integer;
+  Commands: array of record
+    name: string;
+    proc: TProcedureObject;
+  end;
+  procedure AddProc(Name: string; Proc: TProcedureObject);
+  begin
+    SetLength(Commands, Length(Commands) + 1);
+    Commands[Length(Commands) - 1].name := Name;
+    Commands[Length(Commands) - 1].proc := proc;
+  end;
 begin
   try
-    Example2;
+    InstallConsoleLog;
+    ini := TIniFile.Create(Application.Location + 'Options.ini');
+    try
+      Address := ini.ReadString('options', 'Address', sHost);
+      AddProc('ExampleSocket: Socket threads', @ExampleSocket);
+      AddProc('ExampleSmallBuffer: read write line with small buffer', @ExampleSmallBuffer);
+      AddProc('ExampleHexLine: Hex lines', @ExampleHexLine);
+      AddProc('ExampleHexImage: Hex image', @ExampleHexImage);
+      AddProc('ExampleCopyHexImage: Hex image2 images and read one', @ExampleCopyHexImage);
+      AddProc('ExampleGZImage: GZ image', @ExampleGZImage);
+      while true do
+      begin
+        for n := 0 to Length(Commands) - 1 do
+          WriteLn(IntToStr(n + 1) + ': ' + Commands[n].name);
+        WriteLn();
+        Write('Enter command: ');
+        s := '1';
+        ReadLn(s);
+        WriteLn();
+        s := trim(s);
+        n := StrToIntDef(s, 0);
+        if (n < 1) or (n > Length(Commands)) then
+          exit;
+        WriteLn('Running "' + Commands[n - 1].Name + '"');
+        WriteLn();
+        Commands[n - 1].proc();
+        WriteLn();
+      end;
+      ini.WriteString('options', 'Address', Address);
+    finally
+      ini.Free;
+    end;
   finally
     Write('Press Enter to Exit');
     ReadLn();
@@ -311,8 +460,6 @@ begin
   end;
 end;
 
-var
-  Application: TTestStream;
 begin
   Application := TTestStream.Create(nil);
   Application.Title :='Test Stream';

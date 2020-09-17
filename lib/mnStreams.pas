@@ -219,8 +219,6 @@ type
     function WriteLine(const S: widestring): TFileSize; overload;
     {$endif}
 
-    //function WriteLn(const S: string): TFileSize; overload; deprecated;
-
     function ReadBytes(vCount: Integer): TBytes;
     procedure WriteBytes(Buffer: TBytes);
 
@@ -862,8 +860,8 @@ begin
   Result := 0;
   EOL := EndOfLine;
   if s <> '' then
-    Result := Write(Pointer(S)^, ByteLength(S));
-  Result := Result + Write(Pointer(EOL)^, ByteLength(EOL));
+    Result := Write(PByte(S)^, ByteLength(S));
+  Result := Result + Write(PByte(EOL)^, ByteLength(EOL));
 end;
 
 procedure TmnBufferStream.WriteBytes(Buffer: TBytes);
