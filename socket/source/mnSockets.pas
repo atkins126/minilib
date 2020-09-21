@@ -35,12 +35,16 @@ type
   TmnShutdown = (sdReceive, sdSend);
   TmnShutdowns = set of TmnShutdown;
   TmnError = (erSuccess, erTimeout, erClosed, erInvalid);
+
+  TSocketHandle = Integer;
+
   TSelectCheck = (slRead, slWrite);
 
   TmnsoOption = (
     soReuseAddr,
     soKeepAlive,
-    soNoDelay, //Nagle's algorithm use it for faster communication, do not wait until ACK for previously sent data and accumulate data in send buffer...
+    soNagle, //TODO
+    soNoDelay, //deprecated, Nagle's algorithm use it for faster communication, do not wait until ACK for previously sent data and accumulate data in send buffer...
     soQuickAck, //SIO_TCP_SET_ACK_FREQUENCY fo windows, TCP_QUICKACK for Linux
     //soCORK, //not exist in windows //Don't send any data (partial frames) smaller than the MSS until the application says so or until 200ms later; is opposite of soNoDelay. The former forces packet-accumulation delay
     //soBroadcast, soDebug, soDontLinger, soDontRoute, soOOBInLine, soAcceptConn
@@ -51,6 +55,12 @@ type
     soSSL  //Use OpenSSL 1.1.1
     );
   TmnsoOptions = set of TmnsoOption;
+
+  TmnSocketParams = record //TODO
+    Options: TmnsoOptions;
+    ReadTimeout: Integer;
+    WriteTimeout: Integer;
+  end;
 
   TSocketKind = (skClient, skServer, skListener);
 
@@ -65,12 +75,13 @@ type
     FKind: TSocketKind;
     function GetConnected: Boolean;
   protected
-    FHandle: Integer; //following OpenSSL handle of socket
+    FHandle: TSocketHandle; //following OpenSSL handle of socket
     FPrepared: Boolean;
 
     ContextOwned: Boolean; //if not referenced
     SSL: TSSL;
 
+    function GetSocketError: Integer; virtual;
     function GetActive: Boolean; virtual; abstract;
     procedure CheckActive; //this will force exception, cuz you should not use socket in api implmentation without active socket, i meant use it in api section only
     function DoSelect(Timeout: Integer; Check: TSelectCheck): TmnError; virtual; abstract;
@@ -99,7 +110,7 @@ type
     //function Flush: Boolean; //TODO, no flush for TCP, bad design OSs
 
     function Listen: TmnError;
-    function Accept: TmnCustomSocket; virtual; abstract;
+    function Accept(Options: TmnsoOptions; ReadTimeout: Integer): TmnCustomSocket;
     property Active: Boolean read GetActive;
     property Connected: Boolean read GetConnected;
     function GetLocalAddress: string; virtual; abstract;
@@ -115,7 +126,10 @@ type
   public
     constructor Create; virtual;
     destructor Destroy; override;
-    procedure Bind(Options: TmnsoOptions; ReadTimeout: Integer; const Port: string; const Address: string; out vSocket: TmnCustomSocket; out vErr: Integer); virtual; abstract;
+    //Bind used by Listener of server
+    procedure Bind(Options: TmnsoOptions; ListenTimeout: Integer; const Port: string; const Address: string; out vSocket: TmnCustomSocket; out vErr: Integer); virtual; abstract;
+    procedure Accept(ListenerHandle: TSocketHandle; Options: TmnsoOptions; ReadTimeout: Integer; out vSocket: TmnCustomSocket; out vErr: Integer); virtual; abstract;
+    //Connect used by clients
     procedure Connect(Options: TmnsoOptions; ConnectTimeout, ReadTimeout: Integer; const Port: string; const Address: string; out vSocket: TmnCustomSocket; out vErr: Integer); virtual; abstract;
   end;
 
@@ -256,11 +270,24 @@ begin
   Result := Active and ([sdReceive, sdSend] <> FShutdownState)
 end;
 
+function TmnCustomSocket.GetSocketError: Integer;
+begin
+  Result := 0;
+end;
+
 function TmnCustomSocket.Listen: TmnError;
 begin
   Result := DoListen;
   if Result > erTimeout then
     Close;
+end;
+
+function TmnCustomSocket.Accept(Options: TmnsoOptions; ReadTimeout: Integer): TmnCustomSocket;
+var
+  aErr: Integer;
+begin
+  CheckActive;
+  WallSocket.Accept(FHandle, Options, ReadTimeout, Result, aErr);
 end;
 
 function TmnCustomSocket.Receive(var Buffer; var Count: Longint): TmnError;

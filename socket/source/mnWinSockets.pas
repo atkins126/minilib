@@ -30,14 +30,12 @@ uses
   mnSockets;
 
 type
-  TSocket = Integer;
-
   { TmnSocket }
 
   TmnSocket = class(TmnCustomSocket)
   private
-    FAddress: TSockAddr;
   protected
+    function GetSocketError: Integer; override;
     function GetActive: Boolean; override;
 
     function DoReceive(var Buffer; var Count: Longint): TmnError; override;
@@ -49,7 +47,6 @@ type
     function DoClose: TmnError; override;
     function DoPending: Boolean; override;
   public
-    function Accept: TmnCustomSocket; override;
     function GetLocalAddress: string; override;
     function GetRemoteAddress: string; override;
     function GetLocalName: string; override;
@@ -64,14 +61,13 @@ type
     FCount: Integer;
     function LookupPort(Port: string): Word;
   protected
-    procedure FreeSocket(var vHandle: TSocket; out vErr: Integer);
-    function Select(vHandle: TSocket; Timeout: Integer; Check: TSelectCheck): TmnError;
+    procedure FreeSocket(var vHandle: TSocketHandle; out vErr: Integer);
+    function Select(vHandle: TSocketHandle; Timeout: Integer; Check: TSelectCheck): TmnError;
   public
     constructor Create; override;
     destructor Destroy; override;
-    //Bind used by servers
-    procedure Bind(Options: TmnsoOptions; ReadTimeout: Integer; const Port: string; const Address: string; out vSocket: TmnCustomSocket; out vErr: Integer); override;
-    //Connect used by clients
+    procedure Bind(Options: TmnsoOptions; ListenTimeout: Integer; const Port: string; const Address: string; out vSocket: TmnCustomSocket; out vErr: Integer); override;
+    procedure Accept(ListenerHandle: TSocketHandle; Options: TmnsoOptions; ReadTimeout: Integer; out vSocket: TmnCustomSocket; out vErr: Integer); override;
     procedure Connect(Options: TmnsoOptions; ConnectTimeout, ReadTimeout: Integer; const Port: string; const Address: string; out vSocket: TmnCustomSocket; out vErr: Integer); override;
     procedure Startup;
     procedure Cleanup;
@@ -81,8 +77,33 @@ implementation
 
 const
   cBacklog = 5;
-  INVALID_SOCKET = -1;
+  INVALID_SOCKET: Integer = -1;
+  SO_TRUE: Longbool = True;
   TCP_QUICKACK = 12; //Some one said it is work on windows too
+
+function InitSocketOptions(Handle: Integer; Options: TmnsoOptions; ReadTimeout: Integer): Integer;  //return error number
+var
+  t: Longint;
+begin
+  if (soNoDelay in Options) and not (soNagle in Options) then
+  //if not (soNagle in Options) then //TODO
+    Result := setsockopt(Handle, IPPROTO_TCP, TCP_NODELAY, PAnsiChar(@SO_TRUE), SizeOf(SO_TRUE));
+  if soKeepAlive in Options then
+    Result := setsockopt(Handle, SOL_SOCKET, SO_KEEPALIVE, PAnsiChar(@SO_TRUE), SizeOf(SO_TRUE));
+  if soQuickAck in Options then
+    Result := setsockopt(Handle, SOL_SOCKET, TCP_QUICKACK, PAnsiChar(@SO_TRUE), SizeOf(SO_TRUE));
+    //ret := WSAIoctl(sock, SIO_TCP_SET_ACK_FREQUENCY, &freq, sizeof(freq), NULL, 0, &bytes, NULL, NULL);
+
+  if not (soWaitBeforeRead in Options) then
+  begin
+    if ReadTimeout <> -1 then
+    begin
+      t := ReadTimeout;
+      //* https://stackoverflow.com/questions/2876024/linux-is-there-a-read-or-recv-from-socket-with-timeout
+      Result := setsockopt(Handle, SOL_SOCKET, SO_RCVTIMEO, @t, SizeOf(t));
+    end;
+  end;
+end;
 
 { TmnSSLServerSocket }
 
@@ -91,9 +112,21 @@ begin
   Result := (WallSocket as TmnWallSocket).Select(FHandle, Timeout, Check);
 end;
 
+function TmnSocket.GetSocketError: Integer;
+var
+  errno: Longint;
+  l: Integer;
+begin
+  l := SizeOf(errno);
+  if getsockopt(FHandle, SOL_SOCKET, SO_ERROR, @errno, l) <> 0 then
+    Result := errno
+  else
+    Result := 0;
+end;
+
 function TmnSocket.GetActive: Boolean;
 begin
-  Result := TSocket(FHandle) <> INVALID_SOCKET;
+  Result := FHandle <> INVALID_SOCKET;
 end;
 
 function TmnSocket.DoClose: TmnError;
@@ -107,7 +140,7 @@ begin
       Result := erSuccess
     else
       Result := erInvalid;
-    //TSocket(FHandle) := INVALID_SOCKET;
+    //FHandle := INVALID_SOCKET;
     FHandle := INVALID_SOCKET;
   end
   else
@@ -118,6 +151,7 @@ function TmnSocket.DoPending: Boolean;
 var
   Count: Cardinal;
 begin
+  Count := 0;
   if ioctlsocket(FHandle, FIONREAD, Count) = SOCKET_ERROR then
     Result := False //TODO
   else
@@ -156,20 +190,6 @@ begin
     Result := erInvalid
   else
     Result := erSuccess;
-end;
-
-function TmnSocket.Accept: TmnCustomSocket;
-var
-  aHandle: TSocket;
-  AddrSize: Integer;
-begin
-  CheckActive;
-  AddrSize := SizeOf(FAddress);
-  aHandle := WinSock2.Accept(FHandle, @FAddress, @AddrSize);
-  if aHandle = INVALID_SOCKET then
-    Result := nil
-  else
-    Result := TmnSocket.Create(aHandle, Options, skServer);
 end;
 
 function TmnSocket.GetRemoteAddress: string;
@@ -286,7 +306,7 @@ end;
 function TmnSocket.DoReceive(var Buffer; var Count: Longint): TmnError;
 var
   ret: Integer;
-  errno: longint;
+  l, errno: longint;
 begin
   ret := WinSock2.recv(FHandle, Buffer, Count, 0);
   if ret = 0 then
@@ -302,7 +322,12 @@ begin
       Result := erInvalid
     else
     begin
-      errno := WSAGetLastError(); //not work with OpenSSL because it reset error to 0, now readtimeout in socket options not usefull
+      {TODO errno := 0;
+      l := SizeOf(errno);
+      if getsockopt(FHandle, SOL_SOCKET, SO_ERROR, @errno, l) = 0 then //better with SSL, not tested yet
+        errno := 0
+      else}
+        errno := WSAGetLastError(); //not work with OpenSSL because it reset error to 0, now readtimeout in socket options not usefull
       if errno = WSAETIMEDOUT then
         Result := erTimeout //the caller will close it depend on options
       else
@@ -353,18 +378,15 @@ begin
   Startup;
 end;
 
-procedure TmnWallSocket.Bind(Options: TmnsoOptions; ReadTimeout: Integer; const Port: string; const Address: string; out vSocket: TmnCustomSocket; out vErr: Integer);
-const
-  SO_TRUE: Longbool = True;
+procedure TmnWallSocket.Bind(Options: TmnsoOptions; ListenTimeout: Integer; const Port: string; const Address: string; out vSocket: TmnCustomSocket; out vErr: Integer);
 var
-  aHandle: TSocket;
+  aHandle: TSocketHandle;
   {$ifdef FPC}
   aSockAddr: TSockAddr;
   {$else}
   aSockAddr: TSockAddrIn;
   {$endif}
   aHostEnt: PHostEnt;
-  DW: Longint;
 begin
   aHandle := socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
 
@@ -374,18 +396,7 @@ begin
     //aFreq := 1; // can be 1..255, default is 2
     //aErr := ioctlsocket(sock, SIO_TCP_SET_ACK_FREQUENCY, &freq);
 
-    if soNoDelay in Options then
-      setsockopt(aHandle, IPPROTO_TCP, TCP_NODELAY, PAnsiChar(@SO_TRUE), SizeOf(SO_TRUE));
-
-    if not (soWaitBeforeRead in Options) then
-    begin
-      if ReadTimeout <> -1 then
-      begin
-        DW := ReadTimeout;
-        //* https://stackoverflow.com/questions/2876024/linux-is-there-a-read-or-recv-from-socket-with-timeout
-        vErr := setsockopt(aHandle, SOL_SOCKET, SO_RCVTIMEO, @DW, SizeOf(DW));
-      end;
-    end;
+    vErr := InitSocketOptions(aHandle, Options, ListenTimeout);
 
     {$IFNDEF WINCE} //Not exists in WinCE
     if soReuseAddr in Options then
@@ -437,20 +448,34 @@ begin
     vSocket := nil;
 end;
 
+procedure TmnWallSocket.Accept(ListenerHandle: TSocketHandle; Options: TmnsoOptions; ReadTimeout: Integer; out vSocket: TmnCustomSocket; out vErr: Integer);
+var
+  aHandle: TSocketHandle;
+begin
+  aHandle := WinSock2.Accept(ListenerHandle, nil, nil);
+  if aHandle = INVALID_SOCKET then
+    vSocket := nil
+  else
+  begin
+    InitSocketOptions(aHandle, Options, ReadTimeout);
+    vSocket := TmnSocket.Create(aHandle, Options, skServer);
+  end;
+end;
+
 destructor TmnWallSocket.Destroy;
 begin
   inherited;
   Cleanup;
 end;
 
-procedure TmnWallSocket.FreeSocket(var vHandle: TSocket; out vErr: Integer);
+procedure TmnWallSocket.FreeSocket(var vHandle: TSocketHandle; out vErr: Integer);
 begin
   vErr := WSAGetLastError;
   WinSock2.CloseSocket(vHandle);
   vHandle := INVALID_SOCKET;
 end;
 
-function TmnWallSocket.Select(vHandle: TSocket; Timeout: Integer; Check: TSelectCheck): TmnError;
+function TmnWallSocket.Select(vHandle: TSocketHandle; Timeout: Integer; Check: TSelectCheck): TmnError;
 var
   FSet: TFDSet;
   PSetRead, PSetWrite: PFDSet;
@@ -518,10 +543,8 @@ begin
 end;
 
 procedure TmnWallSocket.Connect(Options: TmnsoOptions; ConnectTimeout, ReadTimeout: Integer; const Port: string; const Address: string; out vSocket: TmnCustomSocket; out vErr: Integer);
-const
-  SO_TRUE: Longbool = True;
 var
-  aHandle: TSocket;
+  aHandle: TSocketHandle;
   {$ifdef FPC}
   aAddr: TSockAddr;
   {$else}
@@ -530,31 +553,11 @@ var
   aHost: PHostEnt;
   ret: Longint;
   aMode: u_long;
-  DW: Longint;
 begin
   aHandle := socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
   if aHandle <> INVALID_SOCKET then
   begin
-    if soNoDelay in Options then
-      setsockopt(aHandle, IPPROTO_TCP, TCP_NODELAY, PAnsiChar(@SO_TRUE), SizeOf(SO_TRUE));
-
-    //http://support.microsoft.com/default.aspx?kbid=140325
-    if soKeepAlive in Options then
-      setsockopt(aHandle, SOL_SOCKET, SO_KEEPALIVE, PAnsiChar(@SO_TRUE), SizeOf(SO_TRUE));
-
-    if not (soWaitBeforeRead in Options) then
-    begin
-      if ReadTimeout <> -1 then
-      begin
-        DW := ReadTimeout;
-        //* https://stackoverflow.com/questions/2876024/linux-is-there-a-read-or-recv-from-socket-with-timeout
-        setsockopt(aHandle, SOL_SOCKET, SO_RCVTIMEO, @DW, SizeOf(DW));
-      end;
-    end;
-
-    if soQuickAck in Options then
-      ret := setsockopt(aHandle, SOL_SOCKET, TCP_QUICKACK, PAnsiChar(@SO_TRUE), SizeOf(SO_TRUE));
-      //ret := WSAIoctl(sock, SIO_TCP_SET_ACK_FREQUENCY, &freq, sizeof(freq), NULL, 0, &bytes, NULL, NULL);
+    vErr := InitSocketOptions(aHandle, Options, ReadTimeout);
 
     if ConnectTimeout <> -1 then
     begin
@@ -566,7 +569,7 @@ begin
       end;
     end;
 
-    if aHandle <> TSocket(SOCKET_ERROR) then
+    if aHandle <> TSocketHandle(SOCKET_ERROR) then
     begin
       aAddr.sin_family := AF_INET;
       aAddr.sin_port := htons(LookupPort(Port));

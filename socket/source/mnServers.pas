@@ -32,6 +32,7 @@ type
 
   TmnServerSocket = class(TmnSocketStream)
   private
+    FContext: TContext;
     FAddress: string;
     FPort: string;
     FListenerSocket: TmnCustomSocket;
@@ -41,11 +42,17 @@ type
     procedure FreeSocket; override;
     function CreateSocket(out vErr: Integer): TmnCustomSocket; override;
   public
+    PrivateKeyFile: string;
+    CertificateFile: string;
     constructor Create(const vAddress, vPort: string; vOptions: TmnsoOptions = [soNoDelay]);
+    destructor Destroy; override;
     property Port: string read FPort write SetPort;
     property Address: string read FAddress write SetAddress;
   end;
 
+{
+   Server and Listener classes
+}
 { Server }
 
   TmnServer = class;
@@ -88,8 +95,6 @@ type
     FSocket: TmnCustomSocket; //Listner socket waiting by call "select"
     FLogMessages: TStringList;
     FOptions: TmnsoOptions;
-    procedure Connect;
-    procedure Disconnect;
     function GetConnected: Boolean;
     procedure SetOptions(AValue: TmnsoOptions);
   protected
@@ -106,6 +111,9 @@ type
     PrivateKeyFile: string;
     CertificateFile: string;
 
+    procedure Connect;
+    procedure Disconnect;
+    function Accept: TmnCustomSocket;
   protected
     procedure PostLogs;
     procedure PostChanged;
@@ -130,6 +138,7 @@ type
     property Options: TmnsoOptions read FOptions write SetOptions;
     //if listener connection down by network it will reconnect again
     property Attempts: Integer read FAttempts write FAttempts;
+    //it is ListenerTimeout not ReadTimeOut
     property Timeout: Integer read FTimeout write FTimeout default -1;
   end;
 
@@ -189,6 +198,40 @@ type
 
   end;
 
+//TODO move to another unit SimpleClientServer
+{--------------------------------------------------------------------------------------------------
+        Simple Server
+}
+  TmnServerExecuteProc = procedure(Stream: TmnConnectionStream);
+
+  { TmnSimpleServerConnection }
+
+  TmnSimpleServerConnection = class(TmnServerConnection)
+  protected
+    procedure Process; override;
+  end;
+
+  { TmnSimpleListener }
+
+  TmnSimpleListener = class(TmnListener)
+  protected
+    ExecuteProc: TmnServerExecuteProc; //Referenced to Server proc
+    function DoCreateConnection(vStream: TmnConnectionStream): TmnConnection; override;
+  end;
+
+  { TmnSimpleServer }
+
+  TmnSimpleServer = class(TmnServer)
+  protected
+    ExecuteProc: TmnServerExecuteProc;
+    function DoCreateListener: TmnListener; override;
+  public
+    constructor Create(AutoStart: Boolean; AAddress: string; APort: String; AReadTimeOut: Integer = -1);
+    destructor Destroy; override;
+  end;
+
+//--------------------------------------------------------------------------------------------------
+
   { TmnEventServer }
 
   TmnEventServer = class(TmnServer)
@@ -220,53 +263,44 @@ type
 
 implementation
 
-uses
-  mnOpenSSLUtils;
+{ TmnSimpleServerConnection }
 
-{ TmnServerSocket }
-
-procedure TmnServerSocket.SetAddress(Value: string);
+procedure TmnSimpleServerConnection.Process;
 begin
-  if FAddress = Value then Exit;
-  if Connected then
-    raise EmnException.Create('Can not change Port value when active');
-  FAddress := Value;
+  inherited Process;
+  (Listener as TmnSimpleListener).ExecuteProc(Stream);
 end;
 
-procedure TmnServerSocket.SetPort(Value: string);
+{ TmnSimpleListener }
+
+function TmnSimpleListener.DoCreateConnection(vStream: TmnConnectionStream): TmnConnection;
 begin
-  if FPort =Value then Exit;
-  if Connected then
-    raise EmnException.Create('Can not change Port value when active');
-  FPort := Value;
+  Result := TmnSimpleServerConnection.Create(Self, vStream);
 end;
 
-procedure TmnServerSocket.FreeSocket;
+{ TmnSimpleServer }
+
+function TmnSimpleServer.DoCreateListener: TmnListener;
 begin
-  inherited FreeSocket;
-  FreeAndNil(FListenerSocket);
+  Result := TmnSimpleListener.Create;
+  (Result as TmnSimpleListener).ExecuteProc := ExecuteProc;
 end;
 
-function TmnServerSocket.CreateSocket(out vErr: Integer): TmnCustomSocket;
-begin
-  WallSocket.Bind(Options, ReadTimeout, Port, Address, FListenerSocket, vErr);
-  if FListenerSocket <> nil then
-  begin
-    FListenerSocket.Listen;
-    Result := FListenerSocket.Accept;
-    if Result = nil then
-      FreeAndNil(FListenerSocket);
-  end
-  else
-    Result := nil;
-end;
-
-constructor TmnServerSocket.Create(const vAddress, vPort: string; vOptions: TmnsoOptions);
+constructor TmnSimpleServer.Create(AutoStart: Boolean; AAddress: string; APort: String; AReadTimeOut: Integer);
 begin
   inherited Create;
-  FAddress := vAddress;
-  FPort := vPort;
-  Options := vOptions;
+  Address := AAddress;
+  Port := APort;
+  if AutoStart then
+    Start;
+
+  //SimpleServers.Add(Self); //TODO
+end;
+
+destructor TmnSimpleServer.Destroy;
+begin
+  //SimpleServers.Remove(Self); //TODO
+  inherited Destroy;
 end;
 
 { TmnEventServer }
@@ -491,6 +525,11 @@ begin
     TmnSocketStream(Result).Options := TmnSocketStream(Result).Options + [soSSL]; //TODO i think it should in listener options too
 end;
 
+function TmnListener.Accept: TmnCustomSocket;
+begin
+  Result := Socket.Accept(Options, Timeout);
+end;
+
 procedure TmnListener.PostLogs;
 var
   b: Boolean;
@@ -542,7 +581,7 @@ begin
     try
       if (Socket.Select(Timeout, slRead) = erSuccess) and not Terminated then
       begin
-        aSocket := Socket.Accept;
+        aSocket := Accept;
         if aSocket <> nil then
         begin
           aSocket.Context := Context;
@@ -575,6 +614,7 @@ begin
             try
               aConnection := CreateConnection(aSocket) as TmnServerConnection;
               aConnection.FRemoteIP := aSocket.GetRemoteAddress;
+              //aConnection.Stream.ReadTimeout ////hmmmm
               //aConnection.Prepare
               if FServer <> nil then
                 FServer.DoAccepted(Self, aConnection);
@@ -837,6 +877,74 @@ end;
 procedure TmnServer.Open;
 begin
   Start;
+end;
+
+{ TmnServerSocket }
+
+procedure TmnServerSocket.SetAddress(Value: string);
+begin
+  if FAddress = Value then Exit;
+  if Connected then
+    raise EmnException.Create('Can not change Port value when active');
+  FAddress := Value;
+end;
+
+procedure TmnServerSocket.SetPort(Value: string);
+begin
+  if FPort =Value then Exit;
+  if Connected then
+    raise EmnException.Create('Can not change Port value when active');
+  FPort := Value;
+end;
+
+procedure TmnServerSocket.FreeSocket;
+begin
+  inherited;
+  FreeAndNil(FListenerSocket);
+  FreeAndNil(FContext);
+end;
+
+function TmnServerSocket.CreateSocket(out vErr: Integer): TmnCustomSocket;
+begin
+  if soSSL in Options then
+  begin
+    FContext := TContext.Create(TTLS_SSLServerMethod);
+    FContext.LoadCertFile(CertificateFile);
+    FContext.LoadPrivateKeyFile(PrivateKeyFile);
+    FContext.CheckPrivateKey; //do not use this
+    //Context.SetVerifyNone;
+  end;
+
+  WallSocket.Bind(Options, ReadTimeout, Port, Address, FListenerSocket, vErr);
+  if FListenerSocket <> nil then
+  begin
+//    FListenerSocket.Context := FContext;
+    FListenerSocket.Prepare;
+    FListenerSocket.Listen;
+    Result := FListenerSocket.Accept(Options, ReadTimeout);
+    if Result = nil then
+      FreeAndNil(FListenerSocket)
+    else
+    begin
+      Result.Context := FContext;
+      //Result.Prepare; connect will do that
+    end;
+  end
+  else
+    Result := nil;
+end;
+
+constructor TmnServerSocket.Create(const vAddress, vPort: string; vOptions: TmnsoOptions);
+begin
+  inherited Create;
+  FAddress := vAddress;
+  FPort := vPort;
+  Options := vOptions;
+end;
+
+destructor TmnServerSocket.Destroy;
+begin
+  inherited Destroy;
 end;
 
 end.
