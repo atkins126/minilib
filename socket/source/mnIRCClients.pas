@@ -39,7 +39,12 @@ PREFIX=(ov)@+
 interface
 
 uses
-  Classes, StrUtils, syncobjs,
+  Classes, syncobjs,
+  {$ifdef FPC}
+  StrUtils,
+  {$else Delphi} //MidStr for ansi is deprecated :(
+  AnsiStrings,
+  {$endif}
   mnClasses, mnSockets, mnClients, mnStreams, mnConnections, mnUtils;
 
 const
@@ -109,6 +114,7 @@ type
   );
 
   TIRCReceived = record
+    Time: TDateTime;
     Channel: utf8string;
     Target: utf8string;
     User: utf8string;
@@ -733,6 +739,14 @@ type
   public
   end;
 
+  { TTopic_UserCommand }
+
+  TTopic_UserCommand = class(TIRCUserCommand)
+  protected
+    procedure Send(vChannel: utf8string; vMsg: utf8string); override;
+  public
+  end;
+
   { TMe_UserCommand }
 
   TMe_UserCommand = class(TIRCUserCommand)
@@ -968,6 +982,16 @@ begin
   EndOfNick := Pos('!', Address);
   if EndOfNick > 0 then
     Result := Copy(Address, 1, EndOfNick - 1);
+end;
+
+{ TTopic_UserCommand }
+
+procedure TTopic_UserCommand.Send(vChannel: utf8string; vMsg: utf8string);
+var
+  aChannel: utf8string;
+begin
+  Client.GetCurrentChannel(aChannel);
+  Client.SendRaw('TOPIC ' + aChannel + ' ' + vMsg, prgReady);
 end;
 
 { TDCC_IRCReceiver }
@@ -1709,7 +1733,7 @@ begin
     if not FStream.Connected and Active then
     begin
       try
-        if Tries > 0 then
+        if Tries > 0 then //delay if not first time
         begin
           Lock.Enter;
           try
@@ -1855,6 +1879,7 @@ end;
 procedure TmnIRCConnection.Unprepare;
 begin
   inherited;
+  Tries := 0;
   if Connected then
     Stop;
   Synchronize(Client.Closed);
@@ -1943,6 +1968,7 @@ begin
   if vData <> '' then
   begin
     Result := TIRCQueueCommand.Create;
+    Result.FReceived.Time := Now;
     Result.FRaw := vData;
     aState := prefix;
     p := 1;
@@ -2310,6 +2336,7 @@ var
 begin
   Initialize(aReceived);
   aCMDProcessed := False;
+  //check if it user command, like /j
   if FUseUserCommands and (UserCommands.Count > 0) and (LeftStr(vMsg, 1) = '/') then
   begin
     p := 2;
@@ -2337,11 +2364,12 @@ begin
   if not aCMDProcessed then
   begin
     SendRaw(Format('PRIVMSG %s :%s', [vChannel, vMsg]), prgReady);
+    aReceived.Time := Now;
     aReceived.Channel := vChannel;
     aReceived.Target := vChannel;
     aReceived.User := Session.Nick;
     aReceived.Msg := vMsg;
-    Receive(mtSend, aReceived);
+    Receive(mtSend, aReceived); //echo, not here //TODO
   end;
 end;
 
@@ -2729,6 +2757,7 @@ begin
   UserCommands.Add(TPart_UserCommand.Create('Leave', Self));
   UserCommands.Add(TMode_UserCommand.Create('Mode', Self));
   UserCommands.Add(TSend_UserCommand.Create('Send', Self));
+  UserCommands.Add(TTopic_UserCommand.Create('Topic', Self));
   UserCommands.Add(TMe_UserCommand.Create('Me', Self));
   UserCommands.Add(TNotice_UserCommand.Create('Notice', Self));
   UserCommands.Add(TCNotice_UserCommand.Create('CNotice', Self));

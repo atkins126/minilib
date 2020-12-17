@@ -371,13 +371,13 @@ type
     procedure DescaleCell(vCell: TmnrCell); virtual;
     property Hidden: Boolean read FHidden write FHidden;
     function AliasName: string;
+    //property ExplodeID: Integer read FExplodeID write FExplodeID;
+    property Number: Integer read FNumber write FNumber default 0; //used in exploded cells
   published
     property Name: string read FName write SetName;
     property Alias: string read FAlias write FAlias;
     property Width: Integer read GetWidth write SetWidth default DEFAULT_CELL_WIDTH;
-    property Number: Integer read FNumber write FNumber default 0; //used in exploded cells
-    //property ExplodeID: Integer read FExplodeID write FExplodeID default 0;
-    property AppendTotals: Boolean read FAppendTotals write FAppendTotals default False;
+    property AppendTotals: Boolean read FAppendTotals write FAppendTotals {default False};
   end;
 
   TmnrDesignRow = class(TmnrRowNode)
@@ -529,6 +529,7 @@ type
     function GetReport: TmnrCustomReport;
     procedure DoBeginFill(vReference: TmnrReferencesRow); virtual;
     procedure DoEndFill(vReference: TmnrReferencesRow); virtual;
+    procedure Registered; virtual;
   public
     constructor Create(vNodes: TmnrNode);
     destructor Destroy; override;
@@ -561,12 +562,12 @@ type
     procedure AddDetailTitles;
     procedure ClearSubTotals;
   published
-    property AppendDetailTotals: Boolean read FAppendDetailTotals write FAppendDetailTotals default False;
-    property AppendPageTotals: Boolean read FAppendPageTotals write FAppendPageTotals default False;
-    property AppendReportTotals: Boolean read FAppendReportTotals write FAppendReportTotals default False;
-    property AppendDetailTitles: Boolean read FAppendDetailTitles write FAppendDetailTitles default False;
-    property AppendPageTitles: Boolean read FAppendPageTitles write FAppendPageTitles default False;
-    property AppendReportTitles: Boolean read FAppendReportTitles write FAppendReportTitles default False;
+    property AppendDetailTotals: Boolean read FAppendDetailTotals write FAppendDetailTotals {default False}; //no defaults please
+    property AppendPageTotals: Boolean read FAppendPageTotals write FAppendPageTotals {default False};
+    property AppendReportTotals: Boolean read FAppendReportTotals write FAppendReportTotals {default False};
+    property AppendDetailTitles: Boolean read FAppendDetailTitles write FAppendDetailTitles { default False};
+    property AppendPageTitles: Boolean read FAppendPageTitles write FAppendPageTitles {default False};
+    property AppendReportTitles: Boolean read FAppendReportTitles write FAppendReportTitles {default False};
   end;
 
   TmnrSections = class(TmnrLinkNodes)
@@ -1797,6 +1798,10 @@ begin
   end;
 end;
 
+procedure TmnrSection.Registered;
+begin
+end;
+
 procedure TmnrSection.SetNodes(const Value: TmnrSections);
 begin
   inherited SetNodes(Value);
@@ -2181,6 +2186,7 @@ begin
   else
     Result.FID := vID;
   //Result.FLoopWay := vLoopWay;
+  Result.Registered;
 end;
 
 procedure TmnrRow.DescaleCells;

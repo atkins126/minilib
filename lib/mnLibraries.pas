@@ -18,7 +18,9 @@ uses
   {$ifdef FPC}
     dynlibs,
   {$else}
+    {$IFDEF MSWINDOWS}
     Windows,
+    {$endif}
   {$endif}
     SysUtils;
 
@@ -85,15 +87,16 @@ implementation
 
 resourcestring
   SErrLoadFailed = 'Can not load library "%s". Check your installation.';
-  SErrAlreadyLoaded = 'interface already initialized from library %s.';
+  SErrAlreadyLoaded = 'Already initialized from library %s.';
 
-{$ifdef FPC}
-{$else}
-function LoadLibrary(LibraryName: string):TLibHandle;
+function InternalLoadLibrary(LibraryName: string):TLibHandle;
 begin
-  Result := Windows.LoadLibrary(PChar(LibraryName));
+  {$ifdef FPC}
+    Result := LoadLibrary(LibraryName);
+  {$else}
+    Result := LoadLibrary(PChar(LibraryName));
+  {$endif}
 end;
-{$endif}
 
 { TmnLibrary }
 
@@ -112,16 +115,15 @@ begin
 end;
 
 function TmnLibrary.Load: Boolean;
-var
-  Usage: Integer;
 begin
   Result := not IsLoaded;
   if Result then
   begin
-    Usage := InterlockedIncrement(RefCount);
-    if Usage = 1 then
+
+    RefCount := RefCount + 1;
+    if RefCount = 1 then
     begin
-      FHandle := LoadLibrary(LibraryName);
+      FHandle := InternalLoadLibrary(LibraryName);
       if (FHandle = 0) then
       begin
         RefCount := 0;
@@ -148,7 +150,8 @@ end;
 
 procedure TmnLibrary.Release;
 begin
-  if InterlockedDecrement(RefCount) <= 0 then
+  RefCount := RefCount - 1;
+  if RefCount <= 0 then
   begin
     if Handle <> 0 then
       FreeLibrary(Handle);

@@ -1,4 +1,4 @@
-unit MsgBox;
+unit mnMsgBox;
 {$mode objfpc}{$H+}
 {-----------------------------------------------------------------------------
  Author:    zaher
@@ -143,7 +143,8 @@ type
     destructor Destroy; override;
   end;
 
-function Msg: TMsgBox;
+function MsgBox: TMsgBox;
+function Msg: TMsgBox; deprecated;
 function Choice(vCaption: string; vChoice: TmsgChoice = msgcNone): TmsgSelect;
 
 implementation
@@ -151,11 +152,16 @@ implementation
 var
   FMsgBox: TMsgBox = nil;
 
-function Msg: TMsgBox;
+function MsgBox: TMsgBox;
 begin
   if FMsgBox = nil then
     FMsgBox := TMsgBox.Create;
   Result := FMsgBox;
+end;
+
+function Msg: TMsgBox;
+begin
+  Result := MsgBox;
 end;
 
 function Choice(vCaption: string; vChoice: TmsgChoice): TmsgSelect;

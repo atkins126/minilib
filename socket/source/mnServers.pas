@@ -66,7 +66,6 @@ type
     FStream: TmnConnectionStream;
     function GetListener: TmnListener;
   protected
-    procedure Execute; override;
     function GetConnected: Boolean; override;
     procedure Disconnect; virtual;
   public
@@ -115,17 +114,16 @@ type
     procedure Disconnect;
     function Accept: TmnCustomSocket;
   protected
-    procedure PostLogs;
-    procedure PostChanged;
+    procedure PostLogs; //run in main thread by queue
+    procedure PostChanged; //run in main thread by queue
     procedure Changed; virtual;
 
-    procedure DropConnections; virtual;
     procedure Prepare; virtual;
     procedure Execute; override;
     procedure Unprepare; virtual;
-    procedure Remove(Connection: TmnServerConnection); virtual;
-    procedure Add(Connection: TmnServerConnection); virtual;
-
+    procedure Add(Connection: TmnConnection); override;
+    procedure Remove(Connection: TmnConnection); override;
+    procedure DropConnections; virtual;
   public
     constructor Create;
     destructor Destroy; override;
@@ -380,8 +378,6 @@ begin
   inherited Create(vOwner);
   FStream := vStream;
   FreeOnTerminate := True;
-  if Listener <> nil then
-    Listener.Add(Self);
 end;
 
 destructor TmnServerConnection.Destroy;
@@ -400,13 +396,6 @@ end;
 function TmnServerConnection.GetListener: TmnListener;
 begin
   Result := Owner as TmnListener;
-end;
-
-procedure TmnServerConnection.Execute;
-begin
-  inherited;
-  if Listener <> nil then
-    Listener.Remove(Self);
 end;
 
 function TmnServerConnection.GetConnected: Boolean;
@@ -456,14 +445,9 @@ end;
 
 { TmnListener }
 
-procedure TmnListener.Add(Connection: TmnServerConnection);
+procedure TmnListener.Add(Connection: TmnConnection);
 begin
-  Enter;
-  try
-    List.Add(Connection);
-  finally
-    Leave;
-  end;
+  inherited;
   Changed;
 end;
 
@@ -535,7 +519,6 @@ var
 begin
   if FServer <> nil then
   repeat
-    b := false;
     Enter;
     try
       b := LogMessages.Count > 0;
@@ -574,6 +557,8 @@ var
 begin
   FTries := FAttempts;
   Connect;
+  if Connected then
+    Changed;
   while Connected and not Terminated do
   begin
     try
@@ -683,37 +668,34 @@ begin
   end;
 end;
 
-procedure TmnListener.Remove(Connection: TmnServerConnection);
+procedure TmnListener.Remove(Connection: TmnConnection);
 begin
-  Enter;
-  try
-    if Connection.FreeOnTerminate then
-      List.Remove(Connection);
-  finally
-    Leave;
-  end;
+  inherited;
   Changed;
 end;
 
 procedure TmnListener.DropConnections;
 var
   i: Integer;
+  aConnection: TmnConnection;
 begin
   Enter;
   try
     for i := 0 to List.Count - 1 do
     begin
-      List[i].FreeOnTerminate := False;
+      List[i].FreeOnTerminate := False; //I will kill you
       List[i].Stop;
     end;
   finally
     Leave;
   end;
+
   try
     while List.Count > 0 do
     begin
-      List[0].WaitFor;
-      List[0].Free;
+      aConnection := List[0];
+      aConnection.WaitFor;
+      aConnection.Free;
       List.Delete(0);
     end;
   finally
@@ -815,6 +797,7 @@ begin
     DoBeforeClose;
     FListener.Stop;
     FListener.WaitFor;
+    CheckSynchronize;//to process all queues
     FreeAndNil(FListener);
     FActive := False;
     DoAfterClose;
