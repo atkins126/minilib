@@ -47,7 +47,7 @@ type
     procedure SaveToStream(Stream: TStream); override;
     function ReadInteger(Name: string; Def: Integer = 0): Integer;
     function ReadString(Name: string; Def: String = ''): String;
-    function ReadBoolean(Name: string; Def: Boolean = False): Boolean;
+    function ReadBool(Name: string; Def: Boolean = False): Boolean;
     function RequireField(const vName: string): TmnField; //find it if not exists create it
 
     //AutoRemove remove field if Value = '' when use Values or SetValues
@@ -71,6 +71,8 @@ type
     function GetParams(Index: string): TmnSection;
   public
     constructor Create;
+    destructor Destroy; override;
+
 
     procedure LoadFromStream(Stream: TStream);
     procedure SaveToStream(Stream: TStream);
@@ -79,11 +81,13 @@ type
     function Find(const Name: string): TmnSection;
     function ReadInteger(Section, Name: string; Def: Integer; InheriteIt: Boolean = False): Integer; overload;
     function ReadString(Section, Name: string; Def: String; InheriteIt: Boolean = False): String; overload;
-    function ReadBoolean(Section, Name: string; Def: Boolean; InheriteIt: Boolean = False): Boolean; overload;
+    function ReadBool(Section, Name: string; Def: Boolean; InheriteIt: Boolean = False): Boolean; overload;
+    function ReadBoolean(Section, Name: string; Def: Boolean; InheriteIt: Boolean = False): Boolean; overload; deprecated;
 
     function ReadInteger(Name: string; Def: Integer = 0): Integer; overload;
     function ReadString(Name: string; Def: String = ''): String; overload;
-    function ReadBoolean(Name: string; Def: Boolean = False): Boolean; overload;
+    function ReadBool(Name: string; Def: Boolean = False): Boolean; overload;
+    function ReadBoolean(Name: string; Def: Boolean = False): Boolean; overload; deprecated;
 
     property Params[Index: string]: TmnSection read GetParams; default;
     property Default: TmnSection read FDefault;
@@ -116,7 +120,10 @@ end;
 function TmnParams.SetValue(const Index: string; const AValue: Variant): TmnField;
 begin
   if AutoRemove and VarIsEmpty(AValue) then
-    RemoveByName(Index)
+  begin
+    Result := nil;
+    RemoveByName(Index);
+  end
   else
     Result := inherited SetValue(Index, AValue);
 end;
@@ -212,7 +219,7 @@ begin
     Result := Def;
 end;
 
-function TmnParams.ReadBoolean(Name: string; Def: Boolean): Boolean;
+function TmnParams.ReadBool(Name: string; Def: Boolean): Boolean;
 var
   Field: TmnField;
 begin
@@ -241,6 +248,12 @@ begin
   inherited Create;
   FDefault := TmnSection.Create;
   FDefault.Name := ''; //ok i know it is already empty
+end;
+
+destructor TmnConfig.Destroy;
+begin
+  FreeAndNil(FDefault);
+  inherited;
 end;
 
 function TmnConfig.Find(const Name: string): TmnSection;
@@ -303,7 +316,7 @@ begin
     while not Strings.EndOfStream do
     begin
       Line := Trim(Strings.ReadLineRawByte);
-      if RightStr(Line, 1) = ':' then
+      if RightStr(Line, 1) = '.' then
         AddSection(LeftStr(Line, Length(Line) - 1))
       else if LeftStr(Line, 1) = '[' then
       begin
@@ -371,7 +384,7 @@ begin
     Result := Def;
 end;
 
-function TmnConfig.ReadBoolean(Section, Name: string; Def: Boolean; InheriteIt: Boolean): Boolean;
+function TmnConfig.ReadBool(Section, Name: string; Def: Boolean; InheriteIt: Boolean): Boolean;
 var
   ASection: TmnSection;
   Field: TmnField;
@@ -394,6 +407,11 @@ begin
     Result := Def;
 end;
 
+function TmnConfig.ReadBoolean(Section, Name: string; Def: Boolean; InheriteIt: Boolean): Boolean;
+begin
+  Result := ReadBool(Section, Name, Def, InheriteIt);
+end;
+
 procedure TmnConfig.SaveToFile(const FileName: string);
 var
   Stream: TStream;
@@ -410,9 +428,14 @@ procedure TmnConfig.SaveToStream(Stream: TStream);
 begin
 end;
 
+function TmnConfig.ReadBool(Name: string; Def: Boolean): Boolean;
+begin
+  Result := ReadBool('', Name, Def);
+end;
+
 function TmnConfig.ReadBoolean(Name: string; Def: Boolean): Boolean;
 begin
-  Result := ReadBoolean('', Name, Def);
+  Result := ReadBool('', Name, Def);
 end;
 
 function TmnConfig.ReadInteger(Name: string; Def: Integer): Integer;
