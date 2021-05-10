@@ -152,7 +152,7 @@ end;
 
 function InitSocketOptions(Handle: Integer; Options: TmnsoOptions; ReadTimeout: Integer): Integer;  //return error number
 var
-  t: Longint;
+  t: timeval;
 begin
   Result := 0;
   if (soNoDelay in Options) and not (soNagle in Options) then
@@ -168,9 +168,14 @@ begin
   begin
     if ReadTimeout <> -1 then
     begin
-      t := ReadTimeout;
+      //t := ReadTimeout;
       //* https://stackoverflow.com/questions/2876024/linux-is-there-a-read-or-recv-from-socket-with-timeout
+      //Result := setsockopt(Handle, SOL_SOCKET, SO_RCVTIMEO, t, SizeOf(t));
+      t.tv_sec := ReadTimeout div 1000;
+      t.tv_usec := (ReadTimeout mod 1000) * 1000;
       Result := setsockopt(Handle, SOL_SOCKET, SO_RCVTIMEO, t, SizeOf(t));
+
+      //t := errno;
     end;
   end;
   //TODO setsockopt(aHandle, SOL_SOCKET, SO_NOSIGPIPE, PChar(@SO_TRUE), SizeOf(SO_TRUE));
@@ -234,7 +239,9 @@ begin
   end;
 
   CheckActive;
+
   c := Posix.SysSocket.shutdown(FHandle, iHow);
+
   if c = SOCKET_ERROR then
     Result := erInvalid
   else
@@ -259,7 +266,8 @@ var
 begin
   CheckActive;
 
-  ret := Posix.SysSocket.Recv(FHandle, Buffer, Count, MSG_NOSIGNAL);
+  //ret := Posix.SysSocket.Recv(FHandle, Buffer, Count, MSG_NOSIGNAL); //MSG_NOSIGNAL fail on mac and ios :)
+  ret := Posix.SysSocket.Recv(FHandle, Buffer, Count, 0);
   if ret = 0 then
   begin
     Count := 0;
@@ -511,7 +519,7 @@ begin
       LTimePtr := @LTime;
     end;
 
-    c := Posix.SysSelect.Select(vHandle + 1, PSetRead, PSetWrite, PSetRead, LTimePtr);
+    c := Posix.SysSelect.Select(vHandle + 1, PSetRead, PSetWrite, nil, LTimePtr);
 
     if (c = SOCKET_ERROR) then
       Result := erInvalid
@@ -522,8 +530,7 @@ begin
   end;
 end;
 
-procedure TmnWallSocket.Bind(Options: TmnsoOptions; ReadTimeout: Integer; const Port: string; const Address: string; out vSocket: TmnCustomSocket; out
-  vErr: Integer);
+procedure TmnWallSocket.Bind(Options: TmnsoOptions; ReadTimeout: Integer; const Port: string; const Address: string; out vSocket: TmnCustomSocket; out vErr: Integer);
 var
   aHandle: TSocketHandle;
   aAddr : TSockAddr;
@@ -550,6 +557,7 @@ begin
       FreeSocket(aHandle);
     end;
   end;
+
   if aHandle<>INVALID_SOCKET then
     vSocket := TmnSocket.Create(aHandle, Options, skListener)
   else
@@ -567,8 +575,6 @@ var
   LAddrInfo: pAddrInfo;
   aInfo: AddrInfo;
   aMode: UInt32;
-  time: timeval;
-  DW: Integer;
 begin
   //nonblick connect  https://stackoverflow.com/questions/1543466/how-do-i-change-a-tcp-socket-to-be-non-blocking
   //https://stackoverflow.com/questions/14254061/setting-time-out-for-connect-function-tcp-socket-programming-in-c-breaks-recv
