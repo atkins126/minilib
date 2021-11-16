@@ -18,8 +18,8 @@ unit mncPGMeta;
 interface
 
 uses
-  SysUtils, Classes, contnrs,
-  mncMeta, mncConnections, mncPostgre;
+  SysUtils, Classes, contnrs, mnUtils,
+  mncMeta, mncConnections, mncPostgre, mncSQL;
 
 type
   { TmncPGMeta }
@@ -27,13 +27,11 @@ type
   TmncPGMeta = class(TmncSQLMeta)
   private
   protected
-    procedure EnumCMD(Meta: TmncMetaItems; vKind: TmetaKind; SQL: string; Fields: array of string); overload;//use field 'name'
-    procedure EnumCMD(Meta: TmncMetaItems; vKind: TmetaKind; SQL: string); overload;
-    procedure FetchCMD(Strings:TStringList; SQL: string);//use field 'name'
-    function GetSortSQL(Options: TmetaEnumOptions):string;
+    function QuoteIt(S: string): string; override;
+    function CreateConnection: TmncSQLConnection;
   public
     procedure EnumDatabases(Meta: TmncMetaItems; Options: TmetaEnumOptions =[]); override;
-    procedure EnumTables(Meta: TmncMetaItems; Options: TmetaEnumOptions = []); override;
+    procedure EnumTables(Meta: TmncMetaItems; SQLName: string; Options: TmetaEnumOptions = []); override;
     procedure EnumFields(Meta: TmncMetaItems; SQLName: string; Options: TmetaEnumOptions = []); override;
     procedure EnumViews(Meta: TmncMetaItems; Options: TmetaEnumOptions = []); override;
     procedure EnumProcedures(Meta: TmncMetaItems; Options: TmetaEnumOptions = []); override;
@@ -52,58 +50,24 @@ type
 implementation
 
 uses
-  mncDB, mncSQL;
+  mncDB;
 
-procedure TmncPGMeta.EnumCMD(Meta: TmncMetaItems; vKind: TmetaKind; SQL: string; Fields: array of string);
-var
-  aCMD: TmncSQLCommand;
-  aItem: TmncMetaItem;
-  i: Integer;
+function TmncPGMeta.QuoteIt(S: string): string;
 begin
-  aCMD := CreateCMD(SQL);
-  try
-    aCMD.Prepare;
-    aCMD.Execute;
-    while not aCMD.Done do
-    begin
-      aItem := Meta.Add(aCMD.Field['name'].AsString);
-      aItem.Kind := vKind;
-      for i := Low(Fields) to High(Fields) do
-        aItem.Attributes.Add(Fields[i], aCMD.Field[Fields[i]].AsString);
-      aCMD.Next;
-    end;
-  finally
-  end;
-end;
-
-procedure TmncPGMeta.EnumCMD(Meta: TmncMetaItems; vKind: TmetaKind; SQL: string);
-begin
-  EnumCMD(Meta, vKind, SQL, []);
-end;
-
-procedure TmncPGMeta.FetchCMD(Strings: TStringList; SQL: string);
-var
-  aCMD: TmncSQLCommand;
-begin
-  aCMD := CreateCMD(SQL);
-  try
-    aCMD.Prepare;
-    aCMD.Execute;
-    while not aCMD.Done do
-    begin
-      Strings.Add(aCMD.Field['name'].AsString);
-      aCMD.Next;
-    end;
-  finally
-  end;
-end;
-
-function TmncPGMeta.GetSortSQL(Options: TmetaEnumOptions): string;
-begin
-  if ekSort in Options then
-    Result := ' order by name'
+  if S <> '' then
+  begin
+    if IsAllLowerCase(S) then
+      Result := S
+    else
+      Result := '"' + S + '"';
+  end
   else
     Result := '';
+end;
+
+function TmncPGMeta.CreateConnection: TmncSQLConnection;
+begin
+  Result := TmncPGConnection.Create;
 end;
 
 procedure TmncPGMeta.EnumDatabases(Meta: TmncMetaItems; Options: TmetaEnumOptions);
@@ -111,6 +75,7 @@ var
   conn: TmncPGConnection;
   session: TmncPGSession;
   cmd: TmncPGCommand;
+  aMetaItem: TmncMetaItem;
 begin
   conn := TmncPGConnection.Create;
   try
@@ -139,7 +104,13 @@ begin
         begin
           while not cmd.Done do
           begin
-            Meta.Add(cmd.Field['name'].AsString);
+            aMetaItem := Meta.Add(cmd.Field['name'].AsString);
+            aMetaItem.SQLName := QuoteIt(aMetaItem.Name);
+            aMetaItem.SQLType := 'Database';
+
+            aMetaItem.Definitions['Type'] := 'Database';
+            aMetaItem.Definitions['Database'] := aMetaItem.Name;
+
             //Log(cmd.Field['name'].AsString);
             cmd.Next;
           end;
@@ -155,9 +126,9 @@ begin
   end;
 end;
 
-procedure TmncPGMeta.EnumTables(Meta: TmncMetaItems; Options: TmetaEnumOptions);
+procedure TmncPGMeta.EnumTables(Meta: TmncMetaItems; SQLName: string; Options: TmetaEnumOptions);
 begin
-  EnumCMD(Meta, sokTable, 'select tablename as name FROM pg_catalog.pg_tables where schemaname != ''pg_catalog'' and schemaname != ''information_schema'' ' + GetSortSQL(Options));
+  EnumCMD(Session, Meta, sokTable, 'name', 'Table', 'select tablename as name FROM pg_catalog.pg_tables where schemaname != ''pg_catalog'' and schemaname != ''information_schema'' ' + GetSortSQL(Options), []);
 end;
 
 procedure TmncPGMeta.EnumViews(Meta: TmncMetaItems; Options: TmetaEnumOptions);
@@ -210,10 +181,7 @@ var
   aCMD: TmncSQLCommand;
   aItem: TmncMetaItem;
 begin
-  Meta.Header.Add('type', 'Type');
-  Meta.Header.Add('size', 'Size');
-  Meta.Header.Add('nullable', 'Nullable');
-  aCMD := CreateCMD('SELECT * FROM information_schema.columns WHERE table_name = ''' + SQLName + '''' + GetSortSQL(Options));
+  aCMD := CreateCMD('SELECT * FROM information_schema.columns WHERE table_name = ''' + SQLName + ''' order by ordinal_position');
   //aCMD := CreateCMD('pragma table_info(''' + (SQLName) + ''')' + GetSortSQL(Options));
   try
     aCMD.Prepare;
@@ -222,6 +190,12 @@ begin
     begin
       aItem := TmncMetaItem.Create;
       aItem.Name := aCMD.Field['column_name'].AsString;
+      aItem.SQLName := QuoteIt(aItem.Name);
+      aItem.SQLType := 'Field';
+
+      aItem.Definitions['Type'] := 'Field';
+      aItem.Definitions['Field'] := aItem.Name;
+
       aItem.Attributes.Add('type', aCMD.Field['data_type'].AsString);
       aItem.Attributes.Add('size', IntToStr(ord(aCMD.Field['character_maximum_length'].AsInteger)));
       aItem.Attributes.Add('nullable', aCMD.Field['is_nullable'].AsString);

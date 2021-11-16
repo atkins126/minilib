@@ -42,6 +42,8 @@ type
   TTestStream = class(TObject)
   protected
     procedure InternalExampleSocket(WithServer: Boolean = True; WithClient: Boolean = True; ATestTimeOut: Integer = -1); //Socket threads
+    procedure InternalCompressImage(GZ, WithHex: Boolean); //GZ image
+
     procedure ExampleSocket;
     procedure ExampleSocketOpenStreet;
     procedure ExampleSocketTestTimeout;
@@ -49,7 +51,17 @@ type
     procedure ExampleHexLine; //Hex lines
     procedure ExampleHexImage; //Hex image
     procedure ExampleCopyHexImage; //Hex image2 images and read one
+
+    procedure ExampleInflateImage; //Inflate image
     procedure ExampleGZImage; //GZ image
+
+    procedure ExampleGZText; //GZ image
+
+    procedure ExampleUnGZImage; //Unzip GZ image
+
+    procedure CopyFileWrite;
+    procedure CopyFileRead;
+
     procedure DoRun;
   public
     Location: UTF8String;
@@ -235,6 +247,67 @@ begin
   if B then Result:=TrueS else BoolToStr:=FalseS;
 end;
 
+procedure TTestStream.InternalCompressImage(GZ, WithHex: Boolean);
+var
+  cFile: string;
+  aImageFile: TFileStream;
+  Stream: TmnBufferStream;
+  HexProxy: TmnHexStreamProxy;
+  CompressProxy: TmnDeflateStreamProxy;
+begin
+  if GZ then
+    cFile := Location + 'image.gz'
+  else
+    cFile := Location + 'image.inflate';
+  //image.gz is a compressed file of hex file of image
+  WriteLn('Read image to compressed file');
+  aImageFile := TFileStream.Create(Location + 'image.jpg', fmOpenRead);
+  Stream := TmnWrapperStream.Create(TFileStream.Create(cFile, fmCreate or fmOpenWrite));
+  if GZ then
+    CompressProxy := TmnGzipStreamProxy.Create([cprsRead, cprsWrite], 9)
+  else
+    CompressProxy := TmnDeflateStreamProxy.Create([cprsRead, cprsWrite], 9);
+  Stream.AddProxy(CompressProxy);
+
+  if WithHex then
+  begin
+    HexProxy := TmnHexStreamProxy.Create;
+    Stream.AddProxy(HexProxy);
+  end;
+
+  //CompressProxy.Disable;
+  try
+    WriteLn('Size write: ' + IntToStr(Stream.WriteStream(aImageFile)));
+  finally
+    Stream.Free;
+    FreeAndNil(aImageFile);
+  end;
+
+//---------------------------------------------------------
+
+  WriteLn('Read compressed file to image');
+  aImageFile := TFileStream.Create(Location + 'image_copy.jpg', fmCreate or fmOpenWrite);
+  Stream := TmnWrapperStream.Create(TFileStream.Create(cFile, fmOpenRead));
+  if GZ then
+    CompressProxy := TmnGzipStreamProxy.Create([cprsRead, cprsWrite], 9)
+  else
+    CompressProxy := TmnDeflateStreamProxy.Create([cprsRead, cprsWrite], 9);
+  Stream.AddProxy(CompressProxy);
+
+  if WithHex then
+  begin
+    HexProxy := TmnHexStreamProxy.Create;
+    Stream.AddProxy(HexProxy);
+  end;
+  //CompressProxy.Disable;
+  try
+    WriteLn('Size read: ' + IntToStr(Stream.ReadStream(aImageFile)));
+  finally
+    FreeAndNil(Stream);
+    FreeAndNil(aImageFile);
+  end;
+end;
+
 procedure TTestStream.InternalExampleSocket(WithServer: Boolean; WithClient: Boolean; ATestTimeOut: Integer);
 var
   Reciever: TThreadReciever;
@@ -342,10 +415,12 @@ end;
 procedure TTestStream.ExampleSocketOpenStreet;
 var
   Stream: TmnClientSocket;
+  aFile: TFileStream;
   S: UTF8String;
   t: int64;
 const
-  sURL = 'www.openstreetmap.org';
+  //sURL = 'www.openstreetmap.org';
+  sURL = 'https://c.tile.openstreetmap.de/17/65536/65536.png';
   //sURL = 'zaherdirkey.wordpress.com';
 begin
   NoDelay := True;
@@ -353,17 +428,14 @@ begin
   QuickAck := False;
   UseSSL := False;
   try
-    Stream := TmnClientSocket.Create(sURL, '80');
+    Stream := TmnClientSocket.Create('c.tile.openstreetmap.de', '443');
     Stream.ReadTimeout := TestTimeOut;
     Stream.Options := SocketOptions;
-    if NoDelay then
-      Stream.Options := Stream.Options + [soNoDelay];
-    if KeepAlive then
-      Stream.Options := Stream.Options + [soKeepAlive];
-    if QuickAck then
-      Stream.Options := Stream.Options + [soQuickAck];
-    if UseSSL then
-      Stream.Options := Stream.Options + [soSSL];
+    Stream.Options := Stream.Options + [soNoDelay];
+//  Stream.Options := Stream.Options + [soKeepAlive];
+//    if QuickAck then
+//      Stream.Options := Stream.Options + [soQuickAck];
+    Stream.Options := Stream.Options + [soSSL];
     try
       t := TThread.GetTickCount;
       Stream.EndOfLine := #13#10;
@@ -372,15 +444,30 @@ begin
       WriteLn(TicksToString(TThread.GetTickCount - t));
       if Stream.Connected then
       begin
-        Stream.WriteLineUTF8('GET / HTTP/1.1');
-        Stream.WriteLineUTF8('Host: ' + sURL);
+        Stream.WriteLineUTF8('GET /17/65536/65536.png HTTP/1.1');
+        Stream.WriteLineUTF8('Host: c.tile.openstreetmap.de');
         Stream.WriteLineUTF8('User-Agent: Mozilla');
         Stream.WriteLineUTF8('Connection: close');
         Stream.WriteLineUTF8('');
+
+        //read phase
         Stream.ReadLineUTF8(s);
         WriteLn(s);
         while Stream.Connected and Stream.ReadLineUTF8(s) do
-          WriteLn(s);
+        begin
+          if s ='' then
+          begin
+            aFile := TFileStream.Create(Location + 'map.png', fmCreate or fmOpenWrite);
+            try
+              Stream.CopyToStream(aFile);
+            finally
+              aFile.Free;
+            end;
+            break;
+          end
+          else
+            WriteLn(s);
+        end;
       end;
       WriteLn(TicksToString(TThread.GetTickCount - t));
       Stream.Disconnect;
@@ -404,6 +491,29 @@ begin
   QuickAck := False;
   UseSSL := False;
   InternalExampleSocket(true, true, 1000);
+end;
+
+procedure TTestStream.ExampleUnGZImage;
+var
+  cFile: string;
+  aImageFile: TFileStream;
+  Stream: TmnBufferStream;
+  HexProxy: TmnHexStreamProxy;
+  CompressProxy: TmnDeflateStreamProxy;
+begin
+  cFile := Location + 'image.gz';
+  WriteLn('Read compressed file to image');
+  aImageFile := TFileStream.Create(Location + 'image_copy.jpg', fmCreate or fmOpenWrite);
+  Stream := TmnWrapperStream.Create(TFileStream.Create(cFile, fmOpenRead));
+  CompressProxy := TmnGzipStreamProxy.Create([cprsRead, cprsWrite], 9);
+  Stream.AddProxy(CompressProxy);
+
+  try
+    WriteLn('Size read: ' + IntToStr(Stream.ReadStream(aImageFile)));
+  finally
+    FreeAndNil(Stream);
+    FreeAndNil(aImageFile);
+  end;
 end;
 
 procedure TTestStream.ExampleHexLine;
@@ -436,6 +546,11 @@ begin
   finally
     FreeAndNil(Stream);
   end;
+end;
+
+procedure TTestStream.ExampleInflateImage;
+begin
+  InternalCompressImage(False, False);
 end;
 
 procedure TTestStream.ExampleHexImage;
@@ -508,43 +623,76 @@ begin
 end;
 
 procedure TTestStream.ExampleGZImage;
+begin
+  InternalCompressImage(True, False);
+end;
+
+procedure TTestStream.ExampleGZText;
 var
-  aImageFile: TFileStream;
+  cFile: string;
+  aTextFile: TFileStream;
   Stream: TmnBufferStream;
   HexProxy: TmnHexStreamProxy;
-  GzProxy: TmnDeflateStreamProxy;
+  CompressProxy: TmnDeflateStreamProxy;
 begin
+  cFile := Location + 'file.gz';
   //image.gz is a compressed file of hex file of image
-  WriteLn('Read image to gz file');
-  aImageFile := TFileStream.Create(Location + 'image.jpg', fmOpenRead);
-  Stream := TmnWrapperStream.Create(TFileStream.Create(Location + 'image.gz', fmCreate or fmOpenWrite));
-  GzProxy := TmnDeflateStreamProxy.Create([cprsRead, cprsWrite], 9, true);
-  Stream.AddProxy(GzProxy);
-  HexProxy := TmnHexStreamProxy.Create;
-  Stream.AddProxy(HexProxy);
+  WriteLn('Read text to compressed file');
+  aTextFile := TFileStream.Create(Location + 'file.txt', fmOpenRead);
+  Stream := TmnWrapperStream.Create(TFileStream.Create(cFile, fmCreate or fmOpenWrite));
+  CompressProxy := TmnGzipStreamProxy.Create([cprsRead, cprsWrite], 9);
+  Stream.AddProxy(CompressProxy);
 
-  //GzProxy.Disable;
   try
-    WriteLn('Size write: ' + IntToStr(Stream.WriteStream(aImageFile)));
+    WriteLn('Size write: ' + IntToStr(Stream.WriteStream(aTextFile)));
   finally
     Stream.Free;
-    FreeAndNil(aImageFile);
+    FreeAndNil(aTextFile);
   end;
 
-  WriteLn('Read gz file to image');
-  aImageFile := TFileStream.Create(Location + 'image_copy.jpg', fmCreate or fmOpenWrite);
-  Stream := TmnWrapperStream.Create(TFileStream.Create(Location + 'image.gz', fmOpenRead));
-  GzProxy := TmnDeflateStreamProxy.Create([cprsRead, cprsWrite], 9, true);
-  Stream.AddProxy(GzProxy);
-  HexProxy := TmnHexStreamProxy.Create;
-  Stream.AddProxy(HexProxy);
+//---------------------------------------------------------
 
-  //GzProxy.Disable;
+  WriteLn('Read compressed file to image');
+  aTextFile := TFileStream.Create(Location + 'file_copy.txt', fmCreate or fmOpenWrite);
+  Stream := TmnWrapperStream.Create(TFileStream.Create(cFile, fmOpenRead));
+  CompressProxy := TmnGzipStreamProxy.Create([cprsRead, cprsWrite], 9);
+  Stream.AddProxy(CompressProxy);
+
   try
-    WriteLn('Size read: ' + IntToStr(Stream.ReadStream(aImageFile)));
+    WriteLn('Size read: ' + IntToStr(Stream.ReadStream(aTextFile)));
   finally
     FreeAndNil(Stream);
-    FreeAndNil(aImageFile);
+    FreeAndNil(aTextFile);
+  end;
+end;
+
+procedure TTestStream.CopyFileWrite;
+var
+  Stream1: TmnBufferStream;
+  Stream2: TFileStream;
+begin
+  Stream1 := TmnWrapperStream.Create(TFileStream.Create(Location + 'image_copy.jpg', fmCreate or fmOpenWrite));
+  Stream2 := TFileStream.Create(Location + 'image.jpg', fmOpenRead);
+  try
+    Stream1.CopyFromStream(Stream2);
+  finally
+    FreeAndNil(Stream2);
+    FreeAndNil(Stream1);
+  end;
+end;
+
+procedure TTestStream.CopyFileRead;
+var
+  Stream1: TmnBufferStream;
+  Stream2: TFileStream;
+begin
+  Stream1 := TmnWrapperStream.Create(TFileStream.Create(Location + 'image.jpg', fmOpenRead));
+  Stream2 := TFileStream.Create(Location + 'image_copy.jpg', fmCreate or fmOpenWrite);
+  try
+    Stream1.CopyToStream(Stream2);
+  finally
+    FreeAndNil(Stream2);
+    FreeAndNil(Stream1);
   end;
 end;
 
@@ -598,10 +746,15 @@ begin
       AddProc('ExampleSocket: Socket OpenStreetMap', ExampleSocketOpenStreet);
       AddProc('Example Socket Timout: Socket threads', ExampleSocketTestTimeout);
       AddProc('ExampleSmallBuffer: read write line with small buffer', ExampleSmallBuffer);
+      AddProc('ExampleCopyHexImage: Hex image2 images and read one', ExampleCopyHexImage);
+      AddProc('ExampleInflateImage: Inflate image', ExampleInflateImage);
+      AddProc('ExampleGZImage: GZ image', ExampleGZImage);
+      AddProc('ExampleUnGZImage: Unzip GZ image', ExampleGZImage);
       AddProc('ExampleHexLine: Hex lines', ExampleHexLine);
       AddProc('ExampleHexImage: Hex image', ExampleHexImage);
-      AddProc('ExampleCopyHexImage: Hex image2 images and read one', ExampleCopyHexImage);
-      AddProc('ExampleGZImage: GZ image', ExampleGZImage);
+      AddProc('CopyFile Write', CopyFileWrite);
+      AddProc('CopyFile Read', CopyFileRead);
+      AddProc('ExampleGZText: GZ Text', ExampleGZText);
       while true do
       begin
         for n := 0 to Length(Commands) - 1 do

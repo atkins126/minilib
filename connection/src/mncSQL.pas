@@ -102,22 +102,23 @@ type
     property Connection: TmncSQLConnection read GetConnection write SetConnection;
   end;
 
+  { TmncSQLName }
+
   TmncSQLName = class(TObject)
   public
     ID: Integer;
     Name: string;
+    Position: Integer;
   end;
 
-  { TmncSQLNames }
+  { TmncProcessedSQL }
 
-  TmncProcessedSQL = class(TObjectList)
+  TmncProcessedSQL = class(TmnObjectList<TmncSQLName>)
   private
-    function GetItem(Index: Integer): TmncSQLName;
   public
     SQL: string;
-    procedure Clear; override;
-    procedure Add(vID: Integer; vName:string);
-    property Items[Index: Integer]: TmncSQLName read GetItem; default;
+    procedure Clear; {$ifdef FPC} override; {$endif}    //TODO
+    procedure Add(vID: Integer; vName:string; vPosition: Integer = -1);
   end;
 
   { TmncSQLCommand }
@@ -135,30 +136,30 @@ type
     procedure SetSession(AValue: TmncSQLSession);
     function GetSQL: TStrings;
     procedure SetParamPrefix(AValue: Char);
+    property ProcessedSQL: TmncProcessedSQL read FProcessedSQL;
   protected
     function GetDone: Boolean; override;
     function GetParseOptions: TmncParseSQLOptions; virtual;
     procedure DoParse; override;
     procedure DoUnparse; override;
-    procedure ParseSQL(Options: TmncParseSQLOptions);
+    procedure ParseSQL(SQLOptions: TmncParseSQLOptions);
     procedure Fetch; override;
     procedure Clean; override; //Clean and reset stamemnt like Done or Ready called in Execute before DoExecute and after Prepare
     procedure HitDone;   //Make it FDone True
     procedure HitUnready; //Make it FReady False
+    function GetProcessedSQL: string;
   public
     constructor Create; override;
     destructor Destroy; override;
     function GetLastRowID: Int64; virtual;
     function GetRowsChanged: Integer; virtual;
     property SQL: TStrings read GetSQL;//Alias of Request, autocomplete may add it in private becareful
-    property Done: Boolean read GetDone;
     property Ready: Boolean read FReady;
     property Fetched: Int64 read FFetched;
     property FetchBlobs: Boolean read FFetchBlob write FFetchBlob default false;
     //ParamPrefix is ? to use it to open param and match it before convert it to engine paramprefix
     property ParamPrefix: Char read FParamPrefix write SetParamPrefix default '?';
     property ProcessSQL: Boolean read FProcessSQL write FProcessSQL default True; //TODO
-    property ProcessedSQL: TmncProcessedSQL read FProcessedSQL;
 
     property Session: TmncSQLSession read GetSession write SetSession;
   end;
@@ -385,24 +386,20 @@ end;
 
 { TmncProcessedSQL }
 
-function TmncProcessedSQL.GetItem(Index: Integer): TmncSQLName;
-begin
-  Result := inherited Items[Index] as TmncSQLName;
-end;
-
 procedure TmncProcessedSQL.Clear;
 begin
   inherited Clear;
   SQL := '';
 end;
 
-procedure TmncProcessedSQL.Add(vID: Integer; vName: string);
+procedure TmncProcessedSQL.Add(vID: Integer; vName: string; vPosition: Integer);
 var
   r: TmncSQLName;
 begin
   r := TmncSQLName.Create;
   r.ID := vID;
   r.Name := vName;
+  r.Position := vPosition;
   inherited Add(r);
 end;
 
@@ -445,11 +442,12 @@ end;
 procedure TmncSQLCommand.DoUnparse;
 begin
   inherited;
-  ProcessedSQL.Clear;
+  if ProcessedSQL <> nil then
+    ProcessedSQL.Clear;
   //maybe clear params, idk
 end;
 
-procedure TmncSQLCommand.ParseSQL(Options: TmncParseSQLOptions);
+procedure TmncSQLCommand.ParseSQL(SQLOptions: TmncParseSQLOptions);
 var
   cCurChar, cNextChar, cQuoteChar: Char;
   sSQL, sParamName: string;
@@ -509,7 +507,7 @@ begin
               begin
                 iCurState := ParamState;
                 AddToSQL((Session.Connection as TmncSQLConnection).GetParamChar);//here we can replace it with new param char for example % for some sql engine
-{                  if psoAddParamsID in Options then
+{                  if psoAddParamsID in SQLOptions then
                   AddToSQL();}
               end
               else if cCurChar = '/' then
@@ -554,13 +552,13 @@ begin
               begin
                 if cCurChar = '"' then
                   iCurParamState := ParamQuoteState
-                else if (cCurChar in ['A'..'Z', 'a'..'z', '0'..'9', '_', ' ']) then //Quoted can include spaces
+                else if CharInSet(cCurChar, ['A'..'Z', 'a'..'z', '0'..'9', '_', ' ']) then //Quoted can include spaces
                 begin
                   sParamName := sParamName + cCurChar;
-                  if psoAddParamsNames in Options then
+                  if psoAddParamsNames in SQLOptions then
                     AddToSQL(cCurChar);
                 end
-                else if psoGenerateParams in Options then//if passed ? (ParamChar) without name of params
+                else if psoGenerateParams in SQLOptions then//if passed ? (ParamChar) without name of params
                 begin
                   sParamName := '_Param_' + IntToStr(iParam);
                   Inc(iParam);
@@ -589,16 +587,20 @@ begin
               if (iCurParamState <> ParamQuoteState) and
                 (iCurState <> DefaultState) then
               begin
-                if not (cNextChar in ['A'..'Z', 'a'..'z', '0'..'9', '_']) then
+                if not CharInSet(cNextChar, ['A'..'Z', 'a'..'z', '0'..'9', '_']) then
                 begin
                   Inc(i);
                   iCurState := DefaultState;
-                  if psoAddParamsID in Options then
+                  if cmdReplaceParams in Options then
+                  begin
+                    //AddToSQL(IntToStr(iParam));
+                  end
+                  else if psoAddParamsID in SQLOptions then
                   begin
                     AddToSQL(IntToStr(iParam));
                     Inc(iParam);
                   end;
-                  ProcessedSQL.Add(iParam, sParamName);
+                  ProcessedSQL.Add(iParam, sParamName, ProcessedSQL.SQL.Length);
                   sParamName := '';
                 end;
               end;
@@ -648,6 +650,22 @@ begin
   FReady := False;
 end;
 
+function TmncSQLCommand.GetProcessedSQL: string;
+var
+  i: Integer;
+begin
+  if cmdReplaceParams in Options then
+  begin
+    Result := '';
+    for i := 0 to ProcessedSQL.Count -1 do
+    begin
+      //ProcessedSQL.SQL TODO replace Params ? with real Text
+    end;
+  end
+  else
+    Result := ProcessedSQL.SQL;
+end;
+
 constructor TmncSQLCommand.Create;
 begin
   inherited Create;
@@ -659,8 +677,8 @@ end;
 
 destructor TmncSQLCommand.Destroy;
 begin
+  FreeAndNil(FProcessedSQL); //if you moved it after inherited say WHY
   inherited;
-  FreeAndNil(FProcessedSQL);
 end;
 
 function TmncSQLCommand.GetLastRowID: Int64;

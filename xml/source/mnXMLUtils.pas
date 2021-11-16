@@ -50,8 +50,6 @@ function Enclose(S, Left: string; Right: string = ''): string;
 function RangeStr(s: string; Start, Stop: Integer): string;
 function ScanIdentifier(const s: string; Start: Integer): Integer;
 function ScanQuoted(SubStr, Text: string): Integer;
-function CreateAttStrings(const Attributes: string): TStrings;
-procedure ReadAttStrings(Strings: TStrings; const Attributes: string);
 
 function CutStr(const ID, S: string; Dequote: Boolean = False): string;
 function URIToFileName(const URI: string): string;
@@ -158,17 +156,6 @@ begin
       c := 1;
     end;
   end;
-end;
-
-procedure ReadAttStrings(Strings: TStrings; const Attributes: string);
-begin
-  StrToStringsCallback(Attributes, Strings, @StrToStringsDeqouteCallbackProc, [' '], [#0, #13, #10]);
-end;
-
-function CreateAttStrings(const Attributes: string): TStrings;
-begin
-  Result := TStringList.Create;
-  ReadAttStrings(Result, Attributes);
 end;
 
 function CutStr(const ID, S: string; Dequote: Boolean = False): string;

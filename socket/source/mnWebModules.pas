@@ -54,9 +54,9 @@ type
     FCookies: TmnParams;
     FKeepAlive: Boolean;
     FURIParams: TmnParams;
-    FCompressIt: Boolean;
     FContentLength: Integer;
-    DeflateProxy: TmnDeflateStreamProxy;
+    FCompressClass: TmCompressStreamProxyClass;
+    FCompressProxy: TmCompressStreamProxy;
   protected
     procedure Created; override;
     procedure Prepare(var Result: TmodExecuteResults); override;
@@ -69,7 +69,6 @@ type
     property URIParams: TmnParams read FURIParams;
     property KeepAlive: Boolean read FKeepAlive write FKeepAlive;
     //Compress on the fly, now we use deflate
-    property CompressIt: Boolean read FCompressIt write FCompressIt;
     property ContentLength: Integer read FContentLength write FContentLength;
   end;
 
@@ -573,11 +572,18 @@ begin
     PostHeader('Keep-Alive', 'timout=' + IntToStr(Module.KeepAliveTimeOut div 5000) + ', max=100');
   end;
 
-  FCompressIt := Module.Compressing and Request.Header['Accept-Encoding'].Have('deflate', [',']);
-  if CompressIt then
+  if Module.Compressing then
   begin
-    PostHeader('Content-Encoding', 'deflate');
+    if Request.Header['Accept-Encoding'].Have('gzip', [',']) then
+      FCompressClass := TmnGzipStreamProxy
+    else if Request.Header['Accept-Encoding'].Have('deflate', [',']) then
+      FCompressClass := TmnDeflateStreamProxy
+    else
+      FCompressClass := nil;
+    if FCompressClass <> nil then
+      PostHeader('Content-Encoding', FCompressClass.GetCompressName);
   end;
+
   if (Request.Header['Content-Length'].IsExists) then
     ContentLength := Request.Header['Content-Length'].AsInteger;
 end;
@@ -607,9 +613,9 @@ begin
     end;
     Result.Status := Result.Status + [erKeepAlive];
   end;
-  if DeflateProxy <> nil then
+  if FCompressProxy <> nil then
   begin
-    DeflateProxy.Disable;
+    FCompressProxy.Disable;
   end;
 end;
 
@@ -625,15 +631,15 @@ begin
     PostHeader('Cookies', Cookies.AsString);
   inherited;
 
-  if CompressIt then
+  if FCompressClass <> nil then
   begin
-    if DeflateProxy = nil then
+    if FCompressProxy = nil then
     begin
-      DeflateProxy := TmnDeflateStreamProxy.Create([cprsWrite], 9, false);
-      RespondStream.AddProxy(DeflateProxy);
+      FCompressProxy := FCompressClass.Create([cprsWrite], 9);
+      RespondStream.AddProxy(FCompressProxy);
     end
     else
-      DeflateProxy.Enable;
+      FCompressProxy.Enable;
   end;
 end;
 

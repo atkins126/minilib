@@ -20,6 +20,8 @@ unit mncPostgre;
 
 }
 
+{.$define ThreadedPGClear}
+
 interface
 
 uses
@@ -361,13 +363,13 @@ type
     function GetDone: Boolean; override;
     function GetActive: Boolean; override;
     procedure DoClose; override;
-    function IsSingleRowMode: Boolean;
     procedure ClearStatement; virtual;
   public
     function GetRowsChanged: Integer; override;
     function GetLastInsertID: Int64;
     property Statement: PPGresult read FStatement;//opened by PQexecPrepared
     property RecordCount: Integer read GetRecordCount;
+    //https://www.postgresql.org/docs/9.2/libpq-single-row-mode.html
     property SingleRowMode: Boolean read FSingleRowMode write FSingleRowMode;
   end;
 
@@ -394,11 +396,7 @@ type
     function CloseSQL: AnsiString;
   end;
 
-function EncodeBytea(const vStr: string): string; overload;
-function EncodeBytea(vStr: PByte; vLen: Cardinal): string; overload;
-
-function DecodeBytea(const vStr: string): string; overload;
-function DecodeBytea(vStr: PByte; vLen: Cardinal): string; overload;
+function PQLibVersion: Integer;
 
 implementation
 
@@ -413,51 +411,9 @@ begin
   Result := Val;
 end;
 
-function EncodeBytea(vStr: PByte; vLen: Cardinal): string; overload;
-var
-  e: PByte;
-  aLen: Longword;
+function PQLibVersion: Integer;
 begin
-  if vLen=0 then
-    Result := ''
-  else
-  begin
-    e := PQescapeBytea(vStr, vLen, @aLen);
-    try
-      SetLength(Result, aLen + 1);
-      Move(e^, Result[2], aLen - 1);
-      Result[1] := '''';//todo, what is that?
-      Result[aLen+1] := '''';
-      //StrCopy(PChar(Result), e);
-    finally
-      PQFreemem(e);
-    end;
-  end;
-end;
-
-function EncodeBytea(const vStr: string): string;
-begin
-  Result := EncodeBytea(PByte(vStr), ByteLength(vStr));
-end;
-
-function DecodeBytea(vStr: PByte; vLen: Cardinal): string; overload;
-var
-  e: PByte;
-  aLen: Longword;
-begin
-  e := PQunescapeBytea(PByte(vStr), @aLen);
-  try
-    SetLength(Result, aLen);
-    if aLen<>0 then
-      Move(e^, Result[1], aLen);
-  finally
-    PQFreemem(e);
-  end;
-end;
-
-function DecodeBytea(const vStr: string): string;
-begin
-  Result := DecodeBytea(PByte(vStr), ByteLength(vStr));
+  Result := mncPGHeader.PQlibVersion();
 end;
 
 { TmncPGBinds }
@@ -1094,11 +1050,6 @@ begin
   //Connection.Execute();
 end;
 
-function TmncPGCommand.IsSingleRowMode: Boolean;
-begin
-  Result := SingleRowMode and Assigned(PQsetSingleRowMode);
-end;
-
 function TmncPGCommand.GetDone: Boolean;
 begin
   Result := (FStatement = nil) or FEOF;
@@ -1132,7 +1083,7 @@ begin
         f := 0;
     end;
 
-    if IsSingleRowMode then
+    if SingleRowMode then
     begin
       PQsendQueryPrepared(Session.DBHandle, PAnsiChar(FHandle), Binds.Count, P, nil, nil, f);
       PQsetSingleRowMode(Session.DBHandle);
@@ -1152,7 +1103,7 @@ begin
 
   FStatus := PQresultStatus(FStatement);
   FBOF := True;
-  if IsSingleRowMode then
+  if SingleRowMode then
     FEOF := (FStatement=nil) or not (FStatus in [PGRES_SINGLE_TUPLE])
   else
     FEOF := (FStatement=nil) or not (FStatus in [PGRES_TUPLES_OK]);
@@ -1184,7 +1135,7 @@ begin
     else
       inc(FTuple);
 
-    if IsSingleRowMode then
+    if SingleRowMode then
     begin
       FetchValues(FStatement, FTuple);
       PQclear(FStatement);
@@ -1205,14 +1156,14 @@ var
   c: PPGconn;
   r: PPGresult;
   s: UTF8String;
-  i: Integer;
-  z: Integer;
+//  i: Integer;
+//  z: Integer;
 begin
   FBOF := True;
   FHandle := Session.NewToken;
   ParseSQL([psoAddParamsID]);
   c := Session.DBHandle;
-  s := UTF8Encode(ProcessedSQL.SQL);
+  s := UTF8Encode(GetProcessedSQL);
 
   r := PQprepare(c, PAnsiChar(FHandle), PAnsiChar(s), Params.Count, nil);
   try
@@ -1256,8 +1207,11 @@ end;
 
 procedure TmncPGCommand.ClearStatement;
 begin
+  {$ifdef ThreadedPGClear}
+  TPGClearThread.Create(FStatement); //tooo slow in ddl command  :(
+  {$else}
   PQclear(FStatement);
-  //TPGClearThread.Create(FStatement); //tooo slow in ddl command  :(
+  {$endif}
 end;
 
 procedure TmncPGCommand.DeallocateStatement;
@@ -1636,7 +1590,7 @@ begin
   begin
     PQconsumeInput(FHandle);
     FEvent := PQnotifies(FHandle);
-    if FEvent<>nil then
+    if FEvent <> nil then
     begin
       Synchronize(PostEvent);
       PQFreemem(FEvent);
@@ -2014,7 +1968,7 @@ begin
   else
     b := '';
 
-  s := Format('declare %s %s cursor for %s', [Handle, b, ProcessedSQL.SQL]);
+  s := Format('declare %s %s cursor for %s', [Handle, b, GetProcessedSQL]);
   r := PQprepare(c, PAnsiChar(FHandle), PAnsiChar(s), 0 , nil);
 
   for i := 0 to Params.Count - 1 do
@@ -2083,7 +2037,21 @@ begin
 end;
 
 procedure TPGClearThread.Execute;
+{var
+  block: PPGresult_data;
+  c: Integer;}
 begin
+  {c := 0;
+  block := FStatement^.curBlock;
+  while block <> nil do
+  begin
+    FStatement^.curBlock := block^.Next;
+    PQFreemem(block);
+    block :=FStatement^.curBlock;
+    inc(c);
+    if (c mod 10) = 0 then
+      Sleep(1);
+  end;}
   PQclear(FStatement);
 end;
 

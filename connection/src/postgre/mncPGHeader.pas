@@ -1,6 +1,15 @@
 unit mncPGHeader;
-{$ifdef FPC}{$mode Delphi}{$H+}{$endif}
-{}
+{ postgresql 13.x }
+{$IFDEF FPC}
+{$MODE delphi}
+{$PACKRECORDS C}
+{$ENDIF}
+
+{$M+}{$H+}
+
+//{$MINENUMSIZE 4} //same as {$Z4} All enum must be sized as Integer
+{$Z4}{$A8}
+
 {**
  *  This file is part of the "Mini Connections"
  *
@@ -11,19 +20,21 @@ unit mncPGHeader;
  *
  *}
  {
-   This file sqlite3.inc ported from Lazarus just to be compatiple in both Delphi and FPC
+   Initially this file ported from Lazarus just to be compatiple in both Delphi and FPC
+   But we updated it from postgresql 13.x
+
+   src/interfaces/libpq/libpq-fe.h
  }
 
 interface
 
 uses
+  Types,
   mnLibraries,
   SysUtils;
 
-
 const
 
-  NAMEDATALEN = 32;
   OIDNAMELEN = 36;
 
   INV_WRITE = $00020000;
@@ -32,7 +43,6 @@ const
   BLOB_SEEK_SET = 0;
   BLOB_SEEK_CUR = 1;
   BLOB_SEEK_END = 2;
-
 
   OID_BOOL     = 16;
   OID_BYTEA    = 17;
@@ -53,86 +63,254 @@ const
   OID_TIME      = 1083;
   OID_NUMERIC   = 1700;
 
+  CMDSTATUS_LEN = 64;
+
+  {
+   * Option flags for PQcopyResult
+  }
+  PG_COPYRES_ATTRS		     = $01;
+  PG_COPYRES_TUPLES		     = $02;	{ Implies PG_COPYRES_ATTRS }
+  PG_COPYRES_EVENTS		     = $04;
+  PG_COPYRES_NOTICEHOOKS	 = $08;
+
+
 { ****************** Plain API Types definition ***************** }
 
 type
-  {$ifdef FPC}
-  {$PACKRECORDS C}
-  {$else DELPHI}
-  TLibHandle = System.THandle;
+  {$ifndef FPC}
+    {$ifdef CPU64}
+    ULONG_PTR = QWord;
+    {$else}
+    ULONG_PTR = DWord;
+    {$endif}
+  SIZE_T = ULONG_PTR;
   {$endif}
 
+
   OID = Integer;
+  POID = ^OID;
 
 { Application-visible enum types }
-  ConnStatusType = (
+
+  TConnStatusType = (
     CONNECTION_OK,
-    CONNECTION_BAD
+    CONNECTION_BAD,
+
+  	{ Non-blocking mode only below here }
+
+  	{
+  	 * The existence of these should never be relied upon - they should only
+  	 * be used for user feedback or similar purposes.
+  	 }
+  	CONNECTION_STARTED,			{ Waiting for connection to be made.  }
+  	CONNECTION_MADE,			{ Connection OK; waiting to send.     }
+  	CONNECTION_AWAITING_RESPONSE,	{ Waiting for a response from the
+  									 * postmaster.        }
+  	CONNECTION_AUTH_OK,			{ Received authentication; waiting for
+  								 * backend startup. }
+  	CONNECTION_SETENV,			{ Negotiating environment. }
+  	CONNECTION_SSL_STARTUP,		{ Negotiating SSL. }
+  	CONNECTION_NEEDED,			{ Internal state: connect() needed }
+  	CONNECTION_CHECK_WRITABLE,	{ Check if we could make a writable
+  								 * connection. }
+  	CONNECTION_CONSUME,			{ Wait for any pending message and consume
+  								 * them. }
+  	CONNECTION_GSS_STARTUP,		{ Negotiating GSSAPI. }
+  	CONNECTION_CHECK_TARGET		{ Check if we have a proper target connection }
     );
+
+  TPostgresPollingStatusType = (
+  	PGRES_POLLING_FAILED = 0,
+  	PGRES_POLLING_READING,		{ These two indicate that one may	  }
+  	PGRES_POLLING_WRITING,		{ use select before polling again.   }
+  	PGRES_POLLING_OK,
+  	PGRES_POLLING_ACTIVE		{ unused; keep for awhile for backwards
+  								 * compatibility }
+  );
 
   TExecStatusType = (
-    PGRES_EMPTY_QUERY,
-    PGRES_COMMAND_OK, { a query command that doesn't return anything
-      was executed properly by the backend }
-    PGRES_TUPLES_OK, { a query command that returns tuples
-      was executed properly by the backend,
-      PGresult contains the result tuples }
-    PGRES_COPY_OUT, { Copy Out data transfer in progress }
-    PGRES_COPY_IN, { Copy In data transfer in progress }
-    PGRES_BAD_RESPONSE, { an unexpected response was recv'd from
-      the backend }
-    PGRES_NONFATAL_ERROR,
-    PGRES_FATAL_ERROR,
-    PGRES_COPY_BOTH,
-    PGRES_SINGLE_TUPLE
-    );
+    PGRES_EMPTY_QUERY = 0,		{ empty query string was executed }
+    PGRES_COMMAND_OK,			{ a query command that doesn't return
+                                 * anything was executed properly by the
+                                 * backend }
+    PGRES_TUPLES_OK,			{ a query command that returns tuples was
+                                 * executed properly by the backend, PGresult
+                                 * contains the result tuples }
+    PGRES_COPY_OUT,				{ Copy Out data transfer in progress }
+    PGRES_COPY_IN,				{ Copy In data transfer in progress }
+    PGRES_BAD_RESPONSE,			{ an unexpected response was recv'd from the
+                                 * backend }
+    PGRES_NONFATAL_ERROR,		{ notice or warning message }
+    PGRES_FATAL_ERROR,			{ query failed }
+    PGRES_COPY_BOTH,			{ Copy In/Out data transfer in progress }
+    PGRES_SINGLE_TUPLE			{ single tuple from larger resultset }
+  );
 
-{ String descriptions of the TExecStatusTypes }
-  pgresStatus = array[$00..$FF] of PAnsiChar;
+  TPGTransactionStatusType = (
+      PQTRANS_IDLE,				{ connection idle }
+      PQTRANS_ACTIVE,				{ command in progress }
+      PQTRANS_INTRANS,			{ idle, within transaction block }
+      PQTRANS_INERROR,			{ idle, within failed transaction }
+      PQTRANS_UNKNOWN				{ cannot determine status }
+  );
 
-{ PGconn encapsulates a connection to the backend.
+  TPGVerbosity = (
+      PQERRORS_TERSE,				{ single-line error messages }
+      PQERRORS_DEFAULT,			{ recommended style }
+      PQERRORS_VERBOSE,			{ all the facts, ma'am }
+      PQERRORS_SQLSTATE			{ only error severity and SQLSTATE code }
+  );
+
+  TPGContextVisibility = (
+      PQSHOW_CONTEXT_NEVER,		{ never show CONTEXT field }
+      PQSHOW_CONTEXT_ERRORS,		{ show CONTEXT for errors only (default) }
+      PQSHOW_CONTEXT_ALWAYS		{ always show CONTEXT field }
+  );
+
+  {
+   * PGPing - The ordering of this enum should not be altered because the
+   * values are exposed externally via pg_isready.
+  }
+
+  TPGPing = (
+      PQPING_OK,					{ server is accepting connections }
+      PQPING_REJECT,				{ server is alive but rejecting connections }
+      PQPING_NO_RESPONSE,			{ could not establish connection }
+      PQPING_NO_ATTEMPT			{ connection not attempted (bad params) }
+  );
+
+{
+  PGconn encapsulates a connection to the backend.
   The contents of this struct are not supposed to be known to applications.
 }
-  PGconn = Pointer;
-  PPGconn = Pointer;
+  TPGconn = type Pointer;
+  PPGconn = ^TPGconn;
 
-{ PGresult encapsulates the result of a query (or more precisely, of a single
-  SQL command --- a query string given to PQsendQuery can contain multiple
-  commands and thus return multiple PGresult objects).
+  { moved from bottom }
+  TPQnoticeReceiver = procedure(arg: Pointer; res: Pointer); cdecl;
+  TPQnoticeProcessor = procedure(arg: Pointer; message: PAnsiChar); cdecl;
+
+  { Fields needed for notice handling }
+
+  PPGNoticeHooks = ^TPGNoticeHooks;
+  TPGNoticeHooks = record
+    noticeRec: TPQnoticeReceiver; { notice message receiver }
+    noticeRecArg: Pointer;
+    noticeProc: TPQnoticeProcessor;   { notice message processor }
+    noticeProcArg: Pointer;
+  end;
+
+  {
+    PGresult and the subsidiary types PGresAttDesc, PGresAttValue
+    represent the result of a query (or more precisely, of a single SQL
+    command --- a query string given to PQexec can contain multiple commands).
+    Note we assume that a single command can return at most one tuple group,
+    hence there is no need for multiple descriptor sets.
+  }
+
+  {
+    Subsidiary-storage management structure for PGresult.
+    See space management routines in fe-exec.c for details.
+    Note that space[k] refers to the k'th byte starting from the physical
+    head of the block --- it's a union, not a struct!
+  }
+
+  PPGresult_data = ^TPGresult_data;
+  TPGresult_data = record
+    Next: PPGresult_data;
+    Space: array[0..0] of Byte;
+  end;
+
+{
+   PGresult encapsulates the result of a query (or more precisely, of a single
+   SQL command --- a query string given to PQsendQuery can contain multiple
+   commands and thus return multiple PGresult objects).
+   The contents of this struct are not supposed to be known to applications.
+}
+  TPGresult = record //Do not use Packed!!!
+     ntups: Integer;
+     numAttributes: Integer;
+     attDescs: Pointer; //PPGresAttDesc;
+     tuples: Pointer; //PGresAttValue;     { each PGresult tuple is an array of PGresAttValue's }
+     tupArrSize: Integer;     { allocated size of tuples array }
+     numParameters: Integer;
+     paramDescs: Pointer; //PGresParamDesc;
+     resultStatus: TExecStatusType;
+     cmdStatus: array [0..CMDSTATUS_LEN - 1] of Byte;   { cmd status from the query }
+     binary: Integer;         { binary tuple values if binary == 1, otherwise text }
+
+     {
+      * These fields are copied from the originating PGconn, so that operations
+      * on the PGresult don't have to reference the PGconn.
+      }
+     noticeHooks: TPGNoticeHooks;
+     events: Pointer; //*PGEvent;
+     nEvents: Integer;
+     client_encoding: Integer;    { encoding id }
+
+     {
+      * Error information (all NULL if not an error result).  errMsg is the
+      * "overall" error message returned by PQresultErrorMessage.  If we have
+      * per-field info then it is stored in a linked list.
+      }
+     errMsg: PAnsiChar;         { error message, or NULL if no error }
+     errFields: Pointer; //PGMessageField;  { message broken into fields }
+     errQuery: PAnsiChar;       { text of triggering query, if available }
+
+     { All NULL attributes in the query result point to this null string }
+     null_field: array[0..0] of Byte;
+
+     {
+      * Space management information.  Note that attDescs and error stuff, if
+      * not null, point into allocated blocks.  But tuples points to a
+      * separately malloc'd block, so that we can realloc it.
+      }
+     curBlock: PPGresult_data;    { most recently allocated block }
+     curOffset: Integer;      { start offset of free space in block }
+     spaceLeft: Integer;      { number of free bytes remaining in block }
+
+     memorySize: size_t;     { total space allocated for this PGresult }
+  end;
+  PPGresult = ^TPGresult;
+
+{
+  PGcancel encapsulates the information needed to cancel a running
+  query on an existing connection.
   The contents of this struct are not supposed to be known to applications.
 }
-  PGresult = Pointer;
-  PPGresult = Pointer;
+  TPGcancel = type Pointer;
+  PPGcancel= ^TPGcancel;
 
-{ PGnotify represents the occurrence of a NOTIFY message.
+{
+  PGnotify represents the occurrence of a NOTIFY message.
   Ideally this would be an opaque typedef, but it's so simple that it's
   unlikely to change.
   NOTE: in Postgres 6.4 and later, the be_pid is the notifying backend's,
   whereas in earlier versions it was always your own backend's PID.
 }
-  PGnotify = packed record
-    relname: PAnsiChar; { name of relation containing data }
-    be_pid: Integer; { process id of backend }
-    extra: PAnsiChar;
+  PPGnotify = ^TPGnotify;
+  TPGnotify = record
+    relname: PAnsiChar; { notification condition name }
+    be_pid: Integer;  { process ID of notifying server process }
+    extra: PAnsiChar; { notification parameter }
+    { Fields below here are private to libpq; apps should not use 'em }
+    next: PPGnotify;		{ list link }
   end;
 
-  PPGnotify = ^PGnotify;
+  { Function types for notice-handling callbacks }
 
-{ PQnoticeProcessor is the function type for the notice-message callback. }
-
-  PQnoticeProcessor = procedure(arg: Pointer; message: PAnsiChar); cdecl;
+  { moved to top
+  TPQnoticeReceiver = procedure(arg: Pointer; var res: TPGresult); cdecl;
+  TPQnoticeProcessor = procedure(arg: Pointer; message: PAnsiChar); cdecl;
+  }
 
 { Print options for PQprint() }
 
-{
-  We can't use the conventional "bool", because we are designed to be
-  included in a user's program, and user may already have that type
-  defined.  Pqbool, on the other hand, is unlikely to be used.
-}
+  TPQBool = type byte;
 
-  PPChar = array[00..$FF] of PAnsiChar;
+  //PPChar = array[00..$FF] of PAnsiChar;
 
-  PQprintOpt = packed record
+  TPQprintOpt = record
     header: Byte; { print output field headings and row count }
     align: Byte; { fill align the fields }
     standard: Byte; { old brain dead format }
@@ -142,37 +320,45 @@ type
     fieldSep: PAnsiChar; { field separator }
     tableOpt: PAnsiChar; { insert to HTML <table ...> }
     caption: PAnsiChar; { HTML <caption> }
-    fieldName: PPChar; { null terminated array of repalcement field names }
+    fieldName: array[00..$FF] of PAnsiChar; { null terminated array of repalcement field names }
   end;
 
-  PPQprintOpt = ^PQprintOpt;
+  PPQprintOpt = ^TPQprintOpt;
 
-{ ----------------
-  Structure for the conninfo parameter definitions returned by PQconndefaults
-  ----------------
-}
-  PQconninfoOption = packed record
-    keyword: PAnsiChar; { The keyword of the option }
-    envvar: PAnsiChar; { Fallback environment variable name }
-    compiled: PAnsiChar; { Fallback compiled in default value  }
-    val: PAnsiChar; { Options value	}
-    lab: PAnsiChar; { Label for field in connect dialog }
-    dispchar: PAnsiChar; { Character to display for this field
-     in a connect dialog. Values are:
-     ""	Display entered value as is
-     "*"	Password field - hide value
-     "D"	Debug options - don't
-     create a field by default }
-    dispsize: Integer; { Field size in characters for dialog }
+  { ----------------
+   * Structure for the conninfo parameter definitions returned by PQconndefaults
+   * or PQconninfoParse.
+   *
+   * All fields except "val" point at static strings which must not be altered.
+   * "val" is either NULL or a malloc'd current-value string.  PQconninfoFree()
+   * will release both the val strings and the PQconninfoOption array itself.
+   * ----------------
+  }
+
+  TPQconninfoOption = record
+    Keyword: PAnsiChar; { The keyword of the option }
+    EnvVar: PAnsiChar; { Fallback environment variable name }
+    Compiled: PAnsiChar; { Fallback compiled in default value  }
+    Val: PAnsiChar; { Options value	}
+    Lab: PAnsiChar; { Label for field in connect dialog }
+    Dispchar: PAnsiChar; { Character to display for this field
+                           in a connect dialog. Values are:
+                           ""	Display entered value as is
+                           "*"	Password field - hide value
+                           "D"	Debug options - don't
+                           create a field by default }
+    Dispsize: Integer; { Field size in characters for dialog }
   end;
 
-  PPQConninfoOption = ^PQconninfoOption;
+  PPQConninfoOption = ^TPQconninfoOption;
 
-{ ----------------
-  PQArgBlock -- structure for PQfn() arguments
-  ----------------
-}
-  PQArgBlock = packed record
+  {
+   ----------------
+   * PQArgBlock -- structure for PQfn() arguments
+   * ----------------
+  }
+
+  TPQArgBlock = record
     len: Integer;
     isint: Integer;
     case u: Boolean of
@@ -180,180 +366,420 @@ type
       False: (_int: Integer);
   end;
 
-  PPQArgBlock = ^PQArgBlock;
+  PPQArgBlock = ^TPQArgBlock;
 
+  {
+   ----------------
+    PGresAttDesc -- Data about a single attribute (column) of a query result
+   ----------------
+  }
 
-{ ************** Plain API Function types definition ************* }
+  PPGresAttDesc = ^TPGresAttDesc;
+  TPGresAttDesc = record
+      name: PAnsiChar;			{ column name }
+      TableId: Oid;     		{ source table, if known }
+      ColumnId: Integer;		{ source column, if known }
+      Format: Integer;			{ format code for value (text/binary) }
+      TypId: Oid;			      { type id }
+      Typlen: Integer;			{ type size }
+      Atttypmod: Integer;		{ type-specific modifier info }
+  end;
 
-{ ===	in fe-connect.c === }
-  TPQconnectdb = function(ConnInfo: PAnsiChar): PPGconn; cdecl; // FirmOS 8.1 OK
-  TPQsetdbLogin = function(Host, Port, Options, Tty, Db, User, Passwd: PAnsiChar): PPGconn; cdecl; // FirmOS 8.1 OK
-//15022006 FirmOS: omitting   PQconnectStart
-//15022006 FirmOS: omitting  PQconnectPoll
+  {
+    ----------------
+    Exported functions of libpq
+    ----------------
+  }
+
+  { ===	in fe-connect.c === }
+
+  { make a new client connection to the backend }
+  { Asynchronous (non-blocking) }
+
+  TPQconnectStart = function(ConnInfo: PAnsiChar): PPGconn; cdecl;
+  TPQconnectStartParams = function(Keywords: Pointer; Values: Pointer; expand_dbname: Integer): PPGconn; cdecl;
+  TPQconnectPoll = function(conn: PPGconn): TPostgresPollingStatusType; cdecl;
+
+  TPQconnectdb = function(ConnInfo: PAnsiChar): PPGconn; cdecl;
+  TPQconnectdbParams = function(Keywords: Pointer; Values: Pointer; expand_dbname: Integer): PPGconn; cdecl;
+  TPQsetdbLogin = function(Host, Port, Options, Tty, Db, User, Passwd: PAnsiChar): PPGconn; cdecl;
+
+  { close the current connection and free the PGconn data structure }
+  TPQfinish = procedure(conn: PPGconn); cdecl;
+
+  { get info about connection options known to PQconnectdb }
   TPQconndefaults = function: PPQconninfoOption; cdecl;
-  TPQfinish = procedure(Handle: PPGconn); cdecl;
-  TPQreset = procedure(Handle: PPGconn); cdecl;
 
-//15022006 FirmOS: omitting PQresetStart
-//15022006 FirmOS: omitting PQresetPoll
+  { parse connection options in same way as PQconnectdb }
+  TPQconninfoParse = function(conninfo: PAnsiChar; errmsg: PPAnsiChar): PPQconninfoOption; cdecl;
 
-  TPQrequestCancel = function(Handle: PPGconn): Integer; cdecl;
+  { return the connection options used by a live connection }
+  TPQconninfo = function(conn: PPGconn): PPQconninfoOption; cdecl;
 
-  TPQdb = function(Handle: PPGconn): PAnsiChar; cdecl;
-  TPQuser = function(Handle: PPGconn): PAnsiChar; cdecl;
-  TPQpass = function(Handle: PPGconn): PAnsiChar; cdecl;
-  TPQhost = function(Handle: PPGconn): PAnsiChar; cdecl;
-  TPQport = function(Handle: PPGconn): PAnsiChar; cdecl;
-  TPQtty = function(Handle: PPGconn): PAnsiChar; cdecl;
-  TPQoptions = function(Handle: PPGconn): PAnsiChar; cdecl;
-  TPQstatus = function(Handle: PPGconn): ConnStatusType; cdecl;
+  { free the data structure returned by PQconndefaults() or PQconninfoParse() }
+  TPQconninfoFree = procedure(connOptions: PPQconninfoOption); cdecl;
 
-//TBD  PGTransactionStatusType PQtransactionStatus(const PGconn *conn);
+  {
+   * close the current connection and reestablish a new one with the same
+   * parameters
+  }
+  { Asynchronous (non-blocking) }
+  TPQresetStart = function(conn: PPGconn): Integer; cdecl;
+  TPQresetPoll = function(conn: PPGconn): TPostgresPollingStatusType; cdecl;
 
-//15022006 FirmOS: omitting const char *PQparameterStatus(const PGconn *conn, const char *paramName);
+  { Synchronous (blocking) }
+  TPQreset = procedure(conn: PPGconn); cdecl;
 
-//15022006 FirmOS: omitting  PQprotocolVersion
-//15022006 FirmOS: omitting  PQserverVersion
+  { request a cancel structure }
+  TPQgetCancel = function(conn: PPGconn): PPGcancel; cdecl;
 
-  TPQerrorMessage = function(Handle: PPGconn): PAnsiChar; cdecl;
-  TPQsocket = function(Handle: PPGconn): Integer; cdecl;
-  TPQbackendPID = function(Handle: PPGconn): Integer; cdecl;
+  { free a cancel structure }
+  TPQfreeCancel = procedure(cancel: PPGcancel); cdecl;
 
-//15022006 FirmOS: omitting  SSL *PQgetssl(const PGconn *conn);
+  { issue a cancel request }
+  PQcancel = function(cancel: PPGcancel; errbuf: PPAnsiChar; errbufsize: Integer): Integer; cdecl;
 
+  { backwards compatible version of PQcancel; not thread-safe }
+  TPQrequestCancel = function(conn: PPGconn): Integer; cdecl; //deprecated;
 
-  TPQtrace = procedure(Handle: PPGconn; DebugPort: Pointer); cdecl;
-  TPQuntrace = procedure(Handle: PPGconn); cdecl;
-  TPQsetNoticeProcessor = procedure(Handle: PPGconn; Proc: PQnoticeProcessor; Arg: Pointer); cdecl;
+  { Accessor functions for PGconn objects }
+  TPQdb = function(conn: PPGconn): PAnsiChar; cdecl;
+  TPQuser = function(conn: PPGconn): PAnsiChar; cdecl;
+  TPQpass = function(conn: PPGconn): PAnsiChar; cdecl;
+  TPQhost = function(conn: PPGconn): PAnsiChar; cdecl;
+  TPQhostaddr = function(conn: PPGconn): PAnsiChar; cdecl;
+  TPQport = function(conn: PPGconn): PAnsiChar; cdecl;
+  TPQtty = function(conn: PPGconn): PAnsiChar; cdecl;
+  TPQoptions = function(conn: PPGconn): PAnsiChar; cdecl;
+  TPQstatus = function(conn: PPGconn): TConnStatusType; cdecl;
+  TPQtransactionStatus = function(conn: PPGconn): TPGTransactionStatusType; cdecl;
+  TPQparameterStatus = function(conn: PPGconn; paramName: PAnsiChar): PAnsiChar; cdecl; //or maybe PPAnsiChar
+  TPQprotocolVersion = function(conn: PPGconn): Integer; cdecl;
+  TPQserverVersion = function(conn: PPGconn): Integer; cdecl;
+  TPQerrorMessage = function(conn: PPGconn): PAnsiChar; cdecl;
+  TPQsocket = function(conn: PPGconn): Integer; cdecl;
+  TPQbackendPID = function(conn: PPGconn): Integer; cdecl;
+  TPQconnectionNeedsPassword = function(conn: PPGconn): Integer;
+  TPQconnectionUsedPassword = function(conn: PPGconn): Integer;
+  TPQclientEncoding = function(conn: PPGconn): Integer;
+  TPQsetClientEncoding = function(conn: PPGconn; encoding: PAnsiChar): Integer;
 
-{ === in fe-exec.c === }
-  TPQexec = function(Handle: PPGconn; Query: PAnsiChar): PPGresult; cdecl;
-  TPQnotifies = function(Handle: PPGconn): PPGnotify; cdecl;
-  TPQfreeNotify = procedure(Handle: PPGnotify); cdecl;
-  TPQsendQuery = function(Handle: PPGconn; Query: PAnsiChar): Integer; cdecl;
-  TPQgetResult = function(Handle: PPGconn): PPGresult; cdecl;
-  TPQisBusy = function(Handle: PPGconn): Integer; cdecl;
-  TPQconsumeInput = function(Handle: PPGconn): Integer; cdecl;
-  TPQgetline = function(Handle: PPGconn; Str: PAnsiChar; length: Integer): Integer; cdecl;
-  TPQputline = function(Handle: PPGconn; Str: PAnsiChar): Integer; cdecl;
-  TPQgetlineAsync = function(Handle: PPGconn; Buffer: PAnsiChar; BufSize: Integer): Integer; cdecl;
-  TPQputnbytes = function(Handle: PPGconn; Buffer: PAnsiChar; NBytes: Integer): Integer; cdecl;
-  TPQendcopy = function(Handle: PPGconn): Integer; cdecl;
-  TPQfn = function(Handle: PPGconn; fnid: Integer; result_buf, result_len: PInteger; result_is_int: Integer; args: PPQArgBlock; nargs: Integer): PPGresult; cdecl;
-  TPQresultStatus = function(Result: PPGresult): TExecStatusType; cdecl;
+  { SSL information functions }
+
+  TPQsslInUse = function(conn: PPGconn): Integer; cdecl;
+  TPQsslStruct = procedure(conn: PPGconn; struct_name: PAnsiChar); cdecl;
+  TPQsslAttribute = function(conn: PPGconn; attribute_name: PAnsiChar): PAnsiChar; cdecl;
+  TPQsslAttributeNames = function(conn: PPGconn): PPAnsiChar; cdecl;
+
+  { Get the OpenSSL structure associated with a connection. Returns NULL for
+   * unencrypted connections or if any other TLS library is in use. }
+  TPQgetssl = procedure(conn: PPGconn); cdecl;
+
+  { Tell libpq whether it needs to initialize OpenSSL }
+  TPQinitSSL = procedure(do_init: Integer); cdecl;
+
+  { More detailed way to tell libpq whether it needs to initialize OpenSSL }
+  TPQinitOpenSSL = procedure(do_ssl: Integer; do_crypto: Integer); cdecl;
+
+  { Return true if GSSAPI encryption is in use }
+  TPQgssEncInUse = function(conn: PPGconn): Integer; cdecl;
+
+  { Returns GSSAPI context if GSSAPI is in use }
+  TPQgetgssctx = procedure(conn: PPGconn); cdecl;
+
+  { Set verbosity for PQerrorMessage and PQresultErrorMessage }
+  TPQsetErrorVerbosity = function(conn: PPGconn; verbosity: TPGVerbosity): TPGVerbosity; cdecl; //TODO check return
+
+  { Set CONTEXT visibility for PQerrorMessage and PQresultErrorMessage }
+  TPQsetErrorContextVisibility = function(conn: PPGconn; show_context: TPGContextVisibility): TPGContextVisibility; cdecl;
+
+  TPQtrace = procedure(conn: PPGconn; DebugPort: Pointer); cdecl;
+  TPQuntrace = procedure(conn: PPGconn); cdecl;
+
+  { Override default notice handling routines }
+  TPQsetNoticeReceiver = function(conn: PPGconn; proc: TPQnoticeReceiver; Arg: Pointer): TPQnoticeReceiver; cdecl;
+  TPQsetNoticeProcessor = function(conn: PPGconn; proc: TPQnoticeProcessor; Arg: Pointer): TPQnoticeProcessor; cdecl;
+
+  {
+   *	   Used to set callback that prevents concurrent access to
+   *	   non-thread safe functions that libpq needs.
+   *	   The default implementation uses a libpq internal mutex.
+   *	   Only required for multithreaded apps that use kerberos
+   *	   both within their app and for postgresql connections.
+  }
+  TPGthreadlock = procedure(acquire: Integer); cdecl; //callback
+
+  TPQregisterThreadLock = function(newhandler: TPGthreadlock): TPGthreadlock; cdecl;
+
+  { Simple synchronous query }
+  TPQexec = function(conn: PPGconn; query: PAnsiChar): PPGresult; cdecl;
+  TPQexecParams = function(conn: PPGconn; command: PAnsiChar; nParams: Integer; paramTypes: POID; paramValues: PPAnsiChar; paramLengths, paramFormats: Pointer; resultFormat: Integer): PPGresult; cdecl; //todo check arg
+
+  TPQPrepare = function(conn: PPGconn; stmtName, query: PAnsiChar; nParams: Integer; paramTypes: POid): PPGresult; cdecl;
+  TPQExecPrepared = function(conn: PPGconn; stmtName: PAnsiChar; nParams: Integer; paramValues: PPAnsiChar; paramLengths, paramFormats: PInteger; resultFormat: Integer): PPGresult; cdecl;
+
+  TPQsendQuery = function(conn: PPGconn; query: PAnsiChar): Integer; cdecl;
+  TPQsendQueryParams = function(conn: PPGconn; command: PAnsiChar; nParams: Integer; paramTypes: POID; paramValues: PPAnsiChar; paramLengths, paramFormats: PInteger; resultFormat: Integer): Integer; cdecl;
+
+  TPQsendPrepare = function(conn: PPGconn; stmtName, query: PAnsiChar; nParams: Integer; paramTypes: POid): Integer; cdecl;
+  TPQsendQueryPrepared = function(conn: PPGconn; stmtName: PAnsiChar; nParams: Integer; paramValues: PPAnsiChar; paramLengths, paramFormats: PInteger; resultFormat: Integer): Integer; cdecl;
+
+  TPQsetSingleRowMode = function(conn: PPGconn): Integer; cdecl;
+  TPQgetResult = function(conn: PPGconn): PPGresult; cdecl;
+
+  { Routines for managing an asynchronous query }
+
+  TPQisBusy = function(conn: PPGconn): Integer; cdecl;
+  TPQconsumeInput = function(conn: PPGconn): Integer; cdecl;
+
+  { LISTEN/NOTIFY support }
+
+  TPQnotifies = function(conn: PPGconn): PPGnotify; cdecl;
+
+  { Routines for copy in/out }
+  TPQputCopyData = function(conn: PPGconn; buffer: PAnsiChar; nbytes: Integer): Integer; cdecl;
+  TPQputCopyEnd = function(conn: PPGconn; errormsg: PPAnsiChar): Integer; cdecl;
+  TPQgetCopyData = function(conn: PPGconn; buffer: PPAnsiChar; async: Integer): Integer; cdecl;
+
+  { Exists for backward compatibility.  bjm 2003-03-24 }
+  //TPQfreeNotify = procedure(Handle: PPGnotify); deprecated; cdecl;
+  //TPQgetline = function(conn: PPGconn; Str: PAnsiChar; length: Integer): Integer; deprecated; cdecl;
+  //TPQputline = function(conn: PPGconn; Str: PAnsiChar): Integer; deprecated; cdecl;
+  //TPQgetlineAsync = function(conn: PPGconn; Buffer: PAnsiChar; BufSize: Integer): Integer; deprecated; cdecl;
+  //TPQputnbytes = function(conn: PPGconn; Buffer: PAnsiChar; NBytes: Integer): Integer; deprecated; cdecl;
+  //TPQendcopy = function(conn: PPGconn): Integer; deprecated; cdecl;
+
+  //* Set blocking/nonblocking connection to the backend }
+  TPQsetnonblocking = function(conn: PPGconn; arg: Integer): Integer; cdecl;
+  TPQisnonblocking = function(conn: PPGconn): Integer; cdecl;
+  TPQisthreadsafe = function(): Integer; cdecl;
+  TPQping = function(ConnInfo: PAnsiChar): TPGPing; cdecl;
+  TPQpingParams = function(Keywords: Pointer; Values: Pointer; expand_dbname: Integer): TPGPing; cdecl;
+
+  { Force the write buffer to be written (or at least try) }
+  TPQflush = function(conn: PPGconn): Integer;
+
+  {
+   * "Fast path" interface --- not really recommended for application
+   * use
+  }
+  TPQfn = function(conn: PPGconn; fnid: Integer; result_buf, result_len: PInteger; result_is_int: Integer; args: PPQArgBlock; nargs: Integer): PPGresult; cdecl;
+
+  { Accessor functions for PGresult objects }
+  TPQresultStatus = function(result: PPGresult): TExecStatusType; cdecl;
+  TPQresStatus = function(status: TExecStatusType): PAnsiChar; cdecl;
   TPQresultErrorMessage = function(Result: PPGresult): PAnsiChar; cdecl;
-
-  //PAnsiChar = PUtf8Char
-  TPQPrepare = function(Handle: PPGconn; Name, Query: PAnsiChar; nParams: Integer; pTypes: Pointer): PPGresult; cdecl;
-  TPQExecPrepared = function(Handle: PPGconn; Name: PAnsiChar; nParams: Integer; pValues, pLength, pFormats: Pointer; rFormat: Integer): PPGresult; cdecl;
-  TPQdescribePrepared = function(Handle: PPGconn; Name: PAnsiChar): PPGresult; cdecl;
-  TPQnparams  = function(Result: PPGresult): Integer; cdecl;
-  TPQparamtype = function(Result: PPGresult; param_num: Integer): Integer; cdecl;
-  TPQsendQueryPrepared = function(Handle: PPGconn; Name: PAnsiChar; nParams: Integer; pValues, pLength, pFormats: Pointer; rFormat: Integer): Integer; cdecl;
-  TPQsetSingleRowMode = function(Handle: PPGconn): Integer; cdecl;
-
-  //p = params
-  //r = result
-
-//new  char *PQresultErrorField(const PGresult *res, int fieldcode);
+  TPQresultVerboseErrorMessage = function (Result: PPGresult; verbosity: TPGVerbosity; show_context: TPGContextVisibility): PAnsiChar; cdecl;
   TPQresultErrorField = function(result: PPGResult; fieldcode: integer): PAnsiChar; cdecl;
 
   TPQntuples = function(Result: PPGresult): Integer; cdecl;
   TPQnfields = function(Result: PPGresult): Integer; cdecl;
-  TPQbinaryTuples = function(Result: PPGresult): Integer; cdecl;
+  TPQbinaryTuples = function(Result: PPGresult): Integer; cdecl; { deprecated; }
   TPQfname = function(Result: PPGresult; field_num: Integer): PAnsiChar; cdecl;
   TPQfnumber = function(Result: PPGresult; field_name: PAnsiChar): Integer; cdecl;
+  TPQftable = function(Result: PPGresult; field_num: Integer): OID; cdecl;
+  TPQftablecol = function(Result: PPGresult; field_num: Integer): Integer; cdecl;
+  TPQfformat = function(Result: PPGresult; field_num: Integer): Integer; cdecl;
   TPQftype = function(Result: PPGresult; field_num: Integer): OID; cdecl;
   TPQfsize = function(Result: PPGresult; field_num: Integer): Integer; cdecl;
   TPQfmod = function(Result: PPGresult; field_num: Integer): Integer; cdecl;
   TPQcmdStatus = function(Result: PPGresult): PAnsiChar; cdecl;
+  TPQoidStatus = function(Result: PPGresult): PAnsiChar; cdecl; { deprecated 'use PQoidValue'; }
   TPQoidValue = function(Result: PPGresult): OID; cdecl;
-  TPQoidStatus = function(Result: PPGresult): PAnsiChar; cdecl;
   TPQcmdTuples = function(Result: PPGresult): PAnsiChar; cdecl;
   TPQgetvalue = function(Result: PPGresult; tup_num, field_num: Integer): PAnsiChar; cdecl;
   TPQgetlength = function(Result: PPGresult; tup_num, field_num: Integer): Integer; cdecl;
   TPQgetisnull = function(Result: PPGresult; tup_num, field_num: Integer): Integer; cdecl;
+  TPQnparams = function(Result: PPGresult): Integer; cdecl;
+  TPQparamtype = function(Result: PPGresult; field_num: Integer): OID; cdecl;
+
+  { Describe prepared statements and portals }
+  TPQdescribePrepared = function(conn: PPGconn; stmt: PAnsiString): PPGresult; cdecl;
+  TPQdescribePortal = function(conn: PPGconn; portal: PAnsiString): PPGresult; cdecl;
+  TPQsendDescribePrepared = function(conn: PPGconn; stmt: PAnsiString): Integer; cdecl;
+  TPQsendDescribePortal = function(conn: PPGconn; portal: PAnsiString): Integer; cdecl;
+
+  { Delete a PGresult }
   TPQclear = procedure(Result: PPGresult); cdecl;
-  TPQmakeEmptyPGresult = function(Handle: PPGconn; status: TExecStatusType): PPGresult; cdecl;
 
-//FirmOS: New defines
-
-  TPQescapeByteaConn = function(Handle: PPGconn; const from: PAnsiChar; from_length: longword; to_lenght: PLongword): PAnsiChar; cdecl;
-  TPQescapeBytea = function(const from: PByte; from_length: longword; to_lenght: PLongword): PByte; cdecl;
-
-//TODO  TPQescapeString    =function(const from:PAnsiChar;from_length:longword;to_lenght:PLongword):PAnsiChar;cdecl;
-
-//unsigned char *PQescapeByteaConn(PGconn *conn,
-//                                 const unsigned char *from,
-//                                 size_t from_length,
-//                                 size_t *to_length);
-  TPQunescapeBytea = function(const from: PByte; to_lenght: PLongword): PByte; cdecl;
-//unsigned char *PQunescapeBytea(const unsigned char *from, size_t *to_length);
-
+  { For freeing other alloc'd results, such as PGnotify structs }
   TPQFreemem = procedure(ptr: Pointer); cdecl;
-// void PQfreemem(void *ptr);
 
-{ === in fe-lobj.c === }
-  Tlo_open = function(Handle: PPGconn; lobjId: OID; mode: Integer): Integer; cdecl;
-  Tlo_close = function(Handle: PPGconn; fd: Integer): Integer; cdecl;
-  Tlo_read = function(Handle: PPGconn; fd: Integer; buf: PAnsiChar; len: Integer): Integer; cdecl;
-  Tlo_write = function(Handle: PPGconn; fd: Integer; buf: PAnsiChar; len: Integer): Integer; cdecl;
-  Tlo_lseek = function(Handle: PPGconn; fd, offset, whence: Integer): Integer; cdecl;
-  Tlo_creat = function(Handle: PPGconn; mode: Integer): OID; cdecl;
-  Tlo_tell = function(Handle: PPGconn; fd: Integer): Integer; cdecl;
-  Tlo_unlink = function(Handle: PPGconn; lobjId: OID): Integer; cdecl;
-  Tlo_import = function(Handle: PPGconn; filename: PAnsiChar): OID; cdecl;
-  Tlo_export = function(Handle: PPGconn; lobjId: OID; filename: PAnsiChar): Integer; cdecl;
-  Tlo_truncate = function(Handle: PPGconn; fd, len: Integer): Integer; cdecl;
+  { Create and manipulate PGresults }
+  TPQmakeEmptyPGresult = function(conn: PPGconn; status: TExecStatusType): PPGresult; cdecl;
+  TPQcopyResult = function(src: PPGresult; flags: integer): PPGresult; cdecl;
+  TPQsetResultAttrs = function(res: PPGresult; numAttributes: Integer; attDescs: PPGresAttDesc): Integer; cdecl;
+  TPQresultAlloc = procedure(res: PPGresult; nBytes: size_t); cdecl;
+  TPQresultMemorySize = function(res: PPGresult): size_t; cdecl;
+  TPQsetvalue = function(res: PPGresult; tup_num: Integer;  field_num: Integer; value: PAnsiChar; len: Integer): Integer; cdecl;
 
+  { Quoting strings before inclusion in queries. }
+  TPQescapeStringConn = function(conn: PPGconn; toStr: PAnsiChar; fromStr: PAnsiChar; length: size_t; var error: integer): size_t; cdecl; //TODO Check toStr
+  TPQescapeLiteral = function(conn: PPGconn; str: PAnsiChar; len: size_t): PAnsiChar; cdecl;
+  TPQescapeIdentifier = function(conn: PPGconn; str: PAnsiChar; len: size_t): PAnsiChar; cdecl;
+  TPQescapeByteaConn = function(conn: PPGconn; const from: PAnsiChar; from_length: longword; to_lenght: PLongword): PAnsiChar; cdecl;
+  TPQunescapeBytea = function(const from: PByte; to_lenght: PLongword): PByte; cdecl;
 
-{ ************* Plain API Function variables definition ************ }
+  //TPQescapeBytea = function(const from: PByte; from_length: longword; to_lenght: PLongword): PByte; cdecl; deprecated;
+
+  { Large-object access routines }
+  Tlo_open = function(conn: PPGconn; lobjId: OID; mode: Integer): Integer; cdecl;
+  Tlo_close = function(conn: PPGconn; fd: Integer): Integer; cdecl;
+  Tlo_read = function(conn: PPGconn; fd: Integer; buf: PAnsiChar; len: Integer): Integer; cdecl;
+  Tlo_write = function(conn: PPGconn; fd: Integer; buf: PAnsiChar; len: Integer): Integer; cdecl;
+  Tlo_lseek = function(conn: PPGconn; fd, offset, whence: Integer): Integer; cdecl;
+  Tlo_lseek64 = function(conn: PPGconn; fd: Integer; offset: Int64; whence: Integer): Int64; cdecl;
+  Tlo_creat = function(conn: PPGconn; mode: Integer): OID; cdecl;
+  Tlo_create = function(conn: PPGconn; lobjId:Oid): Oid; cdecl;
+  Tlo_tell = function(conn: PPGconn; fd: Integer): Integer; cdecl;
+  Tlo_tell64 = function(conn: PPGconn; fd: Integer): Int64; cdecl;
+  Tlo_truncate = function(conn: PPGconn; fd, len: Integer): Integer; cdecl;
+  Tlo_truncate64 = function(conn: PPGconn; fd: Integer; len: Int64): Int64; cdecl;
+  Tlo_unlink = function(conn: PPGconn; lobjId: OID): Integer; cdecl;
+  Tlo_import = function(conn: PPGconn; filename: PAnsiChar): OID; cdecl;
+  Tlo_import_with_oid = function(conn: PPGconn; const filename: PAnsiChar; lobjId: Oid): Oid; cdecl;
+  Tlo_export = function(conn: PPGconn; lobjId: OID; filename: PAnsiChar): Integer; cdecl;
+
+  { Get the version of the libpq library in use }
+  TPQlibVersion = function(): Integer;
+
+  { Determine length of multibyte encoded char at *s }
+  TPQmblen = function(s: PAnsiChar; encoding: integer): integer;
+
+  { Determine display length of multibyte encoded char at *s }
+  TPQdsplen = function(s: PAnsiChar; encoding: integer): Integer;
+
+  { Get encoding id from environment variable PGCLIENTENCODING }
+  TPQenv2encoding = function(): Integer;
+
+  TPQencryptPassword = function(passwd: PAnsiChar; user: PAnsiChar): PAnsiChar;
+  TPQencryptPasswordConn = function(conn: PPGconn; passwd: PAnsiChar; user: PAnsiChar; algorithm: PAnsiChar): PAnsiChar;
+
+  Tpg_char_to_encoding = function(name: PAnsiChar): Integer;
+  Tpg_encoding_to_char = function(encoding: Integer): PAnsiChar;
+  Tpg_valid_server_encoding_id = function(encoding: Integer): Integer;
+
+  { Support for overriding sslpassword handling with a callback. }
+  {this callback}
+  TPQsslKeyPassHook_OpenSSL_type = function(buf: PAnsiChar; size: Integer; conn: PPGconn): Integer;
+
+  TPQgetSSLKeyPassHook_OpenSSL = function(): TPQsslKeyPassHook_OpenSSL_type;
+  TPQsetSSLKeyPassHook_OpenSSL = procedure (hook: TPQsslKeyPassHook_OpenSSL_type);
+  TPQdefaultSSLKeyPassHook_OpenSSL = function(buf: PAnsiChar; size: Integer; conn: PPGconn): Integer;
 
 var
-{ ===	in fe-connect.c === }
+
+  PQconnectStart: TPQconnectStart;
+  PQconnectStartParams: TPQconnectStartParams;
+  PQconnectPoll: TPQconnectPoll;
+
   PQconnectdb: TPQconnectdb;
   PQsetdbLogin: TPQsetdbLogin;
-  PQconndefaults: TPQconndefaults;
   PQfinish: TPQfinish;
+  PQconndefaults: TPQconndefaults;
+  PQconninfoParse: TPQconninfoParse;
+  PQconninfo: TPQconninfo;
+  PQconninfoFree: TPQconninfoFree;
+
+  PQresetStart: TPQresetStart;
+  PQresetPoll: TPQresetPoll;
+
   PQreset: TPQreset;
+  PQgetCancel: TPQgetCancel;
+  PQfreeCancel: TPQfreeCancel;
   PQrequestCancel: TPQrequestCancel;
+
   PQdb: TPQdb;
   PQuser: TPQuser;
   PQpass: TPQpass;
   PQhost: TPQhost;
+  PQhostaddr: TPQhostaddr;
   PQport: TPQport;
   PQtty: TPQtty;
   PQoptions: TPQoptions;
   PQstatus: TPQstatus;
+  PQtransactionStatus: TPQtransactionStatus;
+  PQparameterStatus: TPQparameterStatus;
+  PQprotocolVersion: TPQprotocolVersion;
+  PQserverVersion: TPQserverVersion;
   PQerrorMessage: TPQerrorMessage;
   PQsocket: TPQsocket;
   PQbackendPID: TPQbackendPID;
+  PQconnectionNeedsPassword: TPQconnectionNeedsPassword;
+  PQconnectionUsedPassword: TPQconnectionUsedPassword;
+  PQclientEncoding: TPQclientEncoding;
+  PQsetClientEncoding: TPQsetClientEncoding;
+
+  PQsslInUse: TPQsslInUse;
+  PQsslStruct: TPQsslStruct;
+  PQsslAttribute: TPQsslAttribute;
+  PQsslAttributeNames: TPQsslAttributeNames;
+
+  PQgetssl: TPQgetssl;
+  PQinitSSL: TPQinitSSL;
+  PQinitOpenSSL: TPQinitOpenSSL;
+  PQgssEncInUse: TPQgssEncInUse;
+  PQgetgssctx: TPQgetgssctx;
+  PQsetErrorVerbosity: TPQsetErrorVerbosity;
+  PQsetErrorContextVisibility: TPQsetErrorContextVisibility;
+
   PQtrace: TPQtrace;
   PQuntrace: TPQuntrace;
+
+  PQsetNoticeReceiver: TPQsetNoticeReceiver;
   PQsetNoticeProcessor: TPQsetNoticeProcessor;
 
-{ === in fe-exec.c === }
   PQexec: TPQexec;
-  PQnotifies: TPQnotifies;
-  PQfreeNotify: TPQfreeNotify;
+  PQexecParams: TPQexecParams;
+  PQPrepare: TPQPrepare;
+  PQExecPrepared: TPQExecPrepared;
   PQsendQuery: TPQsendQuery;
+  PQsendQueryParams: TPQsendQueryParams;
+  PQsendPrepare: TPQsendPrepare;
+  PQsendQueryPrepared: TPQsendQueryPrepared;
+  PQsetSingleRowMode: TPQsetSingleRowMode;
+
   PQgetResult: TPQgetResult;
+
   PQisBusy: TPQisBusy;
   PQconsumeInput: TPQconsumeInput;
-  PQgetline: TPQgetline;
-  PQputline: TPQputline;
-  PQgetlineAsync: TPQgetlineAsync;
-  PQputnbytes: TPQputnbytes;
-  PQendcopy: TPQendcopy;
+
+  PQnotifies: TPQnotifies;
+
+  PQputCopyData: TPQputCopyData;
+  PQputCopyEnd: TPQputCopyEnd;
+  PQgetCopyData: TPQgetCopyData;
+
+  //PQfreeNotify: TPQfreeNotify;
+  //PQgetline: TPQgetline;
+  //PQputline: TPQputline;
+  //PQgetlineAsync: TPQgetlineAsync;
+  //PQputnbytes: TPQputnbytes;
+  //PQendcopy: TPQendcopy;
+
+  PQsetnonblocking: TPQsetnonblocking;
+  PQisnonblocking: TPQisnonblocking;
+  PQisthreadsafe: TPQisthreadsafe;
+  PQping: TPQping;
+  PQpingParams: TPQpingParams;
+
+  PQflush: TPQflush;
+
   PQfn: TPQfn;
   PQresultStatus: TPQresultStatus;
+  PQresStatus: TPQresStatus;
   PQresultErrorMessage: TPQresultErrorMessage;
-  PQresultErrorField: TPQresultErrorField; //Firmos
+  PQresultVerboseErrorMessage: TPQresultVerboseErrorMessage;
+  PQresultErrorField: TPQresultErrorField;
+
   PQntuples: TPQntuples;
   PQnfields: TPQnfields;
   PQbinaryTuples: TPQbinaryTuples;
   PQfname: TPQfname;
   PQfnumber: TPQfnumber;
+  PQftable: TPQftable;
+  PQftablecol: TPQftablecol;
+  PQfformat: TPQfformat;
   PQftype: TPQftype;
   PQfsize: TPQfsize;
   PQfmod: TPQfmod;
@@ -364,22 +790,31 @@ var
   PQgetvalue: TPQgetvalue;
   PQgetlength: TPQgetlength;
   PQgetisnull: TPQgetisnull;
-  PQclear: TPQclear;
-  PQmakeEmptyPGresult: TPQmakeEmptyPGresult;
-  //belal
-  PQPrepare: TPQPrepare;
-  PQExecPrepared: TPQExecPrepared;
-  PQdescribePrepared: TPQdescribePrepared;
   PQnparams: TPQnparams;
   PQparamtype: TPQparamtype;
-  PQsendQueryPrepared: TPQsendQueryPrepared;
-  PQsetSingleRowMode: TPQsetSingleRowMode;
 
-//FirmOS: New defines
-  PQescapeByteaConn: TPQescapeByteaConn;
-  PQescapeBytea: TPQescapeBytea;
-  PQunescapeBytea: TPQunescapeBytea;
+  PQdescribePrepared: TPQdescribePrepared;
+  PQdescribePortal: TPQdescribePortal;
+  PQsendDescribePrepared: TPQsendDescribePrepared;
+  PQsendDescribePortal: TPQsendDescribePortal;
+
+  PQclear: TPQclear;
   PQFreemem: TPQFreemem;
+
+  PQmakeEmptyPGresult: TPQmakeEmptyPGresult;
+  PQcopyResult: TPQcopyResult;
+  PQsetResultAttrs: TPQsetResultAttrs;
+  PQresultAlloc: TPQresultAlloc;
+  PQresultMemorySize: TPQresultMemorySize;
+  PQsetvalue: TPQsetvalue;
+
+  PQescapeStringConn: TPQescapeStringConn;
+  PQescapeLiteral: TPQescapeLiteral;
+  PQescapeIdentifier: TPQescapeIdentifier;
+  PQescapeByteaConn: TPQescapeByteaConn;
+  PQunescapeBytea: TPQunescapeBytea;
+
+  //PQescapeBytea: TPQescapeBytea;
 
 { === in fe-lobj.c === }
   lo_open: Tlo_open;
@@ -387,12 +822,33 @@ var
   lo_read: Tlo_read;
   lo_write: Tlo_write;
   lo_lseek: Tlo_lseek;
+  lo_lseek64: Tlo_lseek64;
   lo_creat: Tlo_creat;
+  lo_create: Tlo_create;
   lo_tell: Tlo_tell;
+  lo_tell64: Tlo_tell64;
+  lo_truncate: Tlo_truncate;
+  lo_truncate64: Tlo_truncate64;
   lo_unlink: Tlo_unlink;
   lo_import: Tlo_import;
+  lo_import_with_oid: Tlo_import_with_oid;
   lo_export: Tlo_export;
-  lo_truncate: Tlo_truncate;
+
+  PQlibVersion: TPQlibVersion;
+
+  PQmblen: TPQmblen;
+  PQdsplen: TPQdsplen;
+  PQenv2encoding: TPQenv2encoding;
+  PQencryptPassword: TPQencryptPassword;
+  PQencryptPasswordConn: TPQencryptPasswordConn;
+
+  pg_char_to_encoding: Tpg_char_to_encoding;
+  pg_encoding_to_char: Tpg_encoding_to_char;
+  pg_valid_server_encoding_id: Tpg_valid_server_encoding_id;
+
+  PQgetSSLKeyPassHook_OpenSSL: TPQgetSSLKeyPassHook_OpenSSL;
+  PQsetSSLKeyPassHook_OpenSSL: TPQsetSSLKeyPassHook_OpenSSL;
+  PQdefaultSSLKeyPassHook_OpenSSL: TPQdefaultSSLKeyPassHook_OpenSSL;
 
 type
 
@@ -406,59 +862,131 @@ type
 var
   PGLib: TmncPGLib = nil;
 
+function PQsetdb(Host, Port, Options, Tty, Db: PAnsiChar): PPGconn;
+
 implementation
+
+function PQsetdb(Host, Port, Options, Tty, Db: PAnsiChar): PPGconn;
+begin
+  Result := PQsetdbLogin(Host, Port, Options, Tty, Db, nil, nil);
+end;
 
 procedure TmncPGLib.Link;
 begin
-{ ===	in fe-connect.c === }
-  PQfreemem := GetAddress('PQfreemem');
-  PQescapeByteaConn := GetAddress('PQescapeByteaConn');
-  PQescapeBytea := GetAddress('PQescapeBytea');
-  PQunescapeBytea := GetAddress('PQunescapeBytea');
+  RaiseError := False;
+  PQconnectStart := GetAddress('PQconnectStart');
+  PQconnectStartParams := GetAddress('PQconnectStartParams');
+  PQconnectPoll := GetAddress('PQconnectPoll');
 
   PQconnectdb := GetAddress('PQconnectdb');
   PQsetdbLogin := GetAddress('PQsetdbLogin');
-  PQconndefaults := GetAddress('PQconndefaults');
   PQfinish := GetAddress('PQfinish');
+  PQconndefaults := GetAddress('PQconndefaults');
+  PQconninfoParse := GetAddress('PQconninfoParse');
+  PQconninfo := GetAddress('PQconninfo');
+  PQconninfoFree := GetAddress('PQconninfoFree');
+
+  PQresetStart := GetAddress('PQresetStart');
+  PQresetPoll := GetAddress('PQresetPoll');
+
   PQreset := GetAddress('PQreset');
+  PQgetCancel := GetAddress('PQgetCancel');
+  PQfreeCancel := GetAddress('PQfreeCancel');
+
   PQrequestCancel := GetAddress('PQrequestCancel');
   PQdb := GetAddress('PQdb');
   PQuser := GetAddress('PQuser');
   PQpass := GetAddress('PQpass');
   PQhost := GetAddress('PQhost');
+  PQhostaddr := GetAddress('PQhostaddr');
   PQport := GetAddress('PQport');
   PQtty := GetAddress('PQtty');
   PQoptions := GetAddress('PQoptions');
   PQstatus := GetAddress('PQstatus');
+  PQtransactionStatus := GetAddress('PQtransactionStatus');
+  PQparameterStatus := GetAddress('PQparameterStatus');
+  PQprotocolVersion := GetAddress('PQprotocolVersion');
+  PQserverVersion := GetAddress('PQserverVersion');
+
   PQerrorMessage := GetAddress('PQerrorMessage');
   PQsocket := GetAddress('PQsocket');
   PQbackendPID := GetAddress('PQbackendPID');
+  PQconnectionNeedsPassword:= GetAddress('PQconnectionNeedsPassword');
+  PQconnectionUsedPassword:= GetAddress('PQconnectionUsedPassword');
+  PQclientEncoding:= GetAddress('PQclientEncoding');
+  PQsetClientEncoding:= GetAddress('PQsetClientEncoding');
+
+  PQsslInUse := GetAddress('PQsslInUse');
+  PQsslStruct := GetAddress('PQsslStruct');
+  PQsslAttribute := GetAddress('PQsslAttribute');
+  PQsslAttributeNames := GetAddress('PQsslAttributeNames');
+
+  PQgetssl := GetAddress('PQgetssl');
+  PQinitSSL := GetAddress('PQinitSSL');
+  PQinitOpenSSL := GetAddress('PQinitOpenSSL');
+  PQgssEncInUse := GetAddress('PQgssEncInUse');
+  PQgetgssctx := GetAddress('PQgetgssctx');
+  PQsetErrorVerbosity := GetAddress('PQsetErrorVerbosity');
+  PQsetErrorContextVisibility := GetAddress('PQsetErrorContextVisibility');
+
   PQtrace := GetAddress('PQtrace');
   PQuntrace := GetAddress('PQuntrace');
+
+  PQsetNoticeReceiver := GetAddress('PQsetNoticeReceiver');
   PQsetNoticeProcessor := GetAddress('PQsetNoticeProcessor');
 
-{ === in fe-exec.c === }
   PQexec := GetAddress('PQexec');
-  PQnotifies := GetAddress('PQnotifies');
-  PQfreeNotify := GetAddress('PQfreeNotify');
+  PQexecParams := GetAddress('PQexecParams');
+
   PQsendQuery := GetAddress('PQsendQuery');
+  PQsendQueryParams := GetAddress('PQsendQueryParams');
+
+  PQPrepare := GetAddress('PQprepare');
+  PQExecPrepared := GetAddress('PQexecPrepared');
+
+  PQsendPrepare := GetAddress('PQsendPrepare');
+  PQsendQueryPrepared := GetAddress('PQsendQueryPrepared');
+
+  PQsetSingleRowMode := GetAddress('PQsetSingleRowMode');
   PQgetResult := GetAddress('PQgetResult');
+
   PQisBusy := GetAddress('PQisBusy');
   PQconsumeInput := GetAddress('PQconsumeInput');
-  PQgetline := GetAddress('PQgetline');
-  PQputline := GetAddress('PQputline');
-  PQgetlineAsync := GetAddress('PQgetlineAsync');
-  PQputnbytes := GetAddress('PQputnbytes');
-  PQendcopy := GetAddress('PQendcopy');
+
+  PQnotifies := GetAddress('PQnotifies');
+
+  PQputCopyData:= GetAddress('PQputCopyData');
+  PQputCopyEnd := GetAddress('PQputCopyEnd');
+  PQgetCopyData := GetAddress('PQgetCopyData');
+
+  //  PQgetline := GetAddress('PQgetline');
+  //  PQputline := GetAddress('PQputline');
+  //  PQgetlineAsync := GetAddress('PQgetlineAsync');
+  //  PQputnbytes := GetAddress('PQputnbytes');
+  //  PQendcopy := GetAddress('PQendcopy');
+
+  PQsetnonblocking := GetAddress('PQsetnonblocking');
+  PQisnonblocking := GetAddress('PQisnonblocking');
+  PQisthreadsafe := GetAddress('PQisthreadsafe');
+  PQping := GetAddress('PQping');
+  PQpingParams := GetAddress('PQpingParams');
+  PQflush := GetAddress('PQflush');
+
   PQfn := GetAddress('PQfn');
   PQresultStatus := GetAddress('PQresultStatus');
+  PQresStatus := GetAddress('PQresStatus');
   PQresultErrorMessage := GetAddress('PQresultErrorMessage');
+  PQresultVerboseErrorMessage := GetAddress('PQresultVerboseErrorMessage');
   PQresultErrorField := GetAddress('PQresultErrorField');
+
   PQntuples := GetAddress('PQntuples');
   PQnfields := GetAddress('PQnfields');
   PQbinaryTuples := GetAddress('PQbinaryTuples');
   PQfname := GetAddress('PQfname');
   PQfnumber := GetAddress('PQfnumber');
+  PQftable:= GetAddress('PQftable');
+  PQftablecol:= GetAddress('PQftablecol');
+  PQfformat:= GetAddress('PQfformat');
   PQftype := GetAddress('PQftype');
   PQfsize := GetAddress('PQfsize');
   PQfmod := GetAddress('PQfmod');
@@ -469,28 +997,65 @@ begin
   PQgetvalue := GetAddress('PQgetvalue');
   PQgetlength := GetAddress('PQgetlength');
   PQgetisnull := GetAddress('PQgetisnull');
-  PQclear := GetAddress('PQclear');
-  PQmakeEmptyPGresult := GetAddress('PQmakeEmptyPGresult');
-  PQPrepare := GetAddress('PQprepare');
-  PQExecPrepared := GetAddress('PQexecPrepared');
-  PQdescribePrepared := GetAddress('PQdescribePrepared');
   PQnparams := GetAddress('PQnparams');
   PQparamtype := GetAddress('PQparamtype');
-  PQsendQueryPrepared := GetAddress('PQsendQueryPrepared');
-  PQsetSingleRowMode := GetAddress('PQsetSingleRowMode');
 
-{ === in fe-lobj.c === }
+  PQdescribePrepared := GetAddress('PQdescribePrepared');
+  PQdescribePortal := GetAddress('PQdescribePortal');
+  PQsendDescribePrepared := GetAddress('PQsendDescribePrepared');
+  PQsendDescribePortal := GetAddress('PQsendDescribePortal');
+
+  PQclear := GetAddress('PQclear');
+  PQfreemem := GetAddress('PQfreemem');
+
+  PQmakeEmptyPGresult := GetAddress('PQmakeEmptyPGresult');
+  PQcopyResult:= GetAddress('PQcopyResult');
+  PQsetResultAttrs:= GetAddress('PQsetResultAttrs');
+  PQresultAlloc:= GetAddress('PQresultAlloc');
+  PQresultMemorySize:= GetAddress('PQresultMemorySize');
+  PQsetvalue:= GetAddress('PQsetvalue');
+
+  PQescapeStringConn := GetAddress('PQescapeStringConn');
+  PQescapeLiteral := GetAddress('PQescapeLiteral');
+  PQescapeIdentifier := GetAddress('PQescapeIdentifier');
+  PQescapeByteaConn := GetAddress('PQescapeByteaConn');
+  PQunescapeBytea := GetAddress('PQunescapeBytea');
+
+  //PQescapeBytea := GetAddress('PQescapeBytea');
+
   lo_open := GetAddress('lo_open');
   lo_close := GetAddress('lo_close');
   lo_read := GetAddress('lo_read');
   lo_write := GetAddress('lo_write');
   lo_lseek := GetAddress('lo_lseek');
+  lo_lseek64 := GetAddress('lo_lseek64');
   lo_creat := GetAddress('lo_creat');
+  lo_create := GetAddress('lo_create');
   lo_tell := GetAddress('lo_tell');
+  lo_tell64 := GetAddress('lo_tell64');
+  lo_truncate := GetAddress('lo_truncate');
+  lo_truncate64 := GetAddress('lo_truncate64');
   lo_unlink := GetAddress('lo_unlink');
   lo_import := GetAddress('lo_import');
+  lo_import_with_oid := GetAddress('lo_import_with_oid');
   lo_export := GetAddress('lo_export');
-  lo_truncate := GetAddress('lo_truncate');
+
+  PQlibVersion := GetAddress('PQlibVersion');
+
+  PQmblen := GetAddress('PQmblen');
+  PQdsplen := GetAddress('PQdsplen');
+  PQenv2encoding := GetAddress('PQenv2encoding');
+  PQencryptPassword := GetAddress('PQencryptPassword');
+  PQencryptPasswordConn := GetAddress('PQencryptPasswordConn');
+
+  pg_char_to_encoding := GetAddress('pg_char_to_encoding');
+  pg_encoding_to_char := GetAddress('pg_encoding_to_char');
+  pg_valid_server_encoding_id := GetAddress('pg_valid_server_encoding_id');
+
+  PQgetSSLKeyPassHook_OpenSSL := GetAddress('PQgetSSLKeyPassHook_OpenSSL');
+  PQsetSSLKeyPassHook_OpenSSL := GetAddress('PQsetSSLKeyPassHook_OpenSSL');
+  PQdefaultSSLKeyPassHook_OpenSSL := GetAddress('PQdefaultSSLKeyPassHook_OpenSSL');
+
 end;
 
 initialization

@@ -121,12 +121,12 @@ type
     procedure Prepare; virtual;
     procedure Execute; override;
     procedure Unprepare; virtual;
-    procedure Add(Connection: TmnConnection); override;
-    procedure Remove(Connection: TmnConnection); override;
     procedure DropConnections; virtual;
   public
     constructor Create;
     destructor Destroy; override;
+    procedure Add(Connection: TmnConnection); override;
+    procedure Remove(Connection: TmnConnection); override;
     procedure Stop; override;
     // Use this function when you are in a thread do not use Server.Log
     procedure Log(S: string); virtual;
@@ -180,8 +180,13 @@ type
     destructor Destroy; override;
     //Server.Log This called from outside of any threads, i mean you should be in the main thread to call it, if not use Listener.Log
     procedure Log(const S: string);
-    procedure Start;
-    procedure Stop;
+
+    procedure Open;
+    procedure Close;
+
+    procedure Start; //alias for Open
+    procedure Stop; //alias for Close
+
     property Listener: TmnListener read FListener;
     property Count: Integer read GetCount;
 
@@ -734,7 +739,7 @@ begin
   DoLog(S);
 end;
 
-procedure TmnServer.Start;
+procedure TmnServer.Open;
 begin
   if (FListener = nil) then // if its already active, dont start again
   begin
@@ -790,7 +795,7 @@ begin
     FServer.DoChanged(Self);
 end;
 
-procedure TmnServer.Stop;
+procedure TmnServer.Close;
 begin
   if (FListener <> nil) then
   begin
@@ -804,6 +809,16 @@ begin
   end;
   Log('Server stopped');
   DoStop;
+end;
+
+procedure TmnServer.Start;
+begin
+  Open;
+end;
+
+procedure TmnServer.Stop;
+begin
+  Close;
 end;
 
 function TmnServer.DoCreateListener: TmnListener;

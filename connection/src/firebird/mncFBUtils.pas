@@ -266,7 +266,7 @@ begin
   b := False;
   for i := 1 to Length(Name) do
   begin
-    if not (Name[i] in ['A'..'Z', '0'..'9', '_']) then
+    if not CharInSet(Name[i], ['A'..'Z', '0'..'9', '_']) then
     begin
       b := true;
       break;
@@ -497,8 +497,7 @@ var
 
 procedure FBAlloc(var P; OldSize, NewSize: Integer; ZeroInit: boolean);
 var
-  i: Integer;
-  s, t: PByte;
+  s: PByte;
 begin
   s := PByte(P);
 
@@ -896,7 +895,8 @@ function GenerateTPBEx(vParams: TStrings): TBytes;
   end;
 
 var
-  i, j, TPBVal, ParamLength: Integer;
+  i, j, TPBVal: Integer;
+  //ParamLength: Integer;
   s, ParamName, ParamValue: AnsiString;
   aCount: Integer;
 begin

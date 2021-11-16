@@ -6,7 +6,7 @@ interface
 
 uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, ExtCtrls, StdCtrls,
-  mnLogs, mnHttpClient;
+  Buttons, mnLogs, mnHttpClient;
 
 type
 
@@ -14,6 +14,8 @@ type
 
   TMainForm = class(TForm)
     Button1: TButton;
+    Button2: TButton;
+    Button3: TButton;
     GetFileSizeBtn1: TButton;
     GetGetBtn: TButton;
     GetGetBtn1: TButton;
@@ -25,6 +27,8 @@ type
     Panel1: TPanel;
     Panel2: TPanel;
     procedure Button1Click(Sender: TObject);
+    procedure Button2Click(Sender: TObject);
+    procedure Button3Click(Sender: TObject);
     procedure GetFileSizeBtn1Click(Sender: TObject);
     procedure GetFileSizeBtnClick(Sender: TObject);
     procedure GetGetBtn1Click(Sender: TObject);
@@ -77,7 +81,7 @@ end;
 
 const
   //sUserAgent = 'Embarcadero URI Client/1.0';
-  sUserAgent = 'Mozilla/5.0';
+  sUserAgent = 'Mozilla/5.0 (Windows NT 10.0; WOW64; rv:56.0) Gecko/20100101 Firefox/56.0';
   //'http://a.tile.openstreetmap.org/18/157418/105125.png' /crc error
   //sURL = 'http://c.tile.openstreetmap.org/18/157418/105127.png';
   sURLGoogle = 'http://mt0.google.com/vt/lyrs=m@999&hl=ar&x=78707&y=52561&z=17&s=Gal';
@@ -91,14 +95,57 @@ var
   HttpClient: TmnHttpClient;
   MemoryStream: TMemoryStream;
 begin
-  LogEdit.Lines.Add('Getting from URL');
+  LogEdit.Lines.Add('Getting from URL ' + sURLGoogle);
   MemoryStream := TMemoryStream.Create;
   HttpClient := TmnHttpClient.Create;
   try
-    HttpClient.Request.UserAgent := sUserAgent;
+    HttpClient.UserAgent := sUserAgent;
     //HttpClient.Compressing := True;
     HttpClient.GetMemoryStream(sURLGoogle, MemoryStream);
     LoadFromStream(HttpClient.Response.ContentType, MemoryStream);
+  finally
+    HttpClient.Free;
+    MemoryStream.Free;
+  end;
+  LogEdit.Lines.Add('Finished');
+end;
+
+procedure TMainForm.Button2Click(Sender: TObject);
+var
+  HttpClient: TmnHttpClient;
+  MemoryStream: TMemoryStream;
+begin
+  //LogEdit.Lines.Add('Getting from URL ' + HostEdit.Text);
+  MemoryStream := TMemoryStream.Create;
+  HttpClient := TmnHttpClient.Create;
+  try
+    HttpClient.Compressing := True;
+    //HttpClient.UserAgent := 'blalbla';
+    //HttpClient.Compressing := True;
+    HttpClient.GetMemoryStream('http://10.0.0.119:81/html/laz-logo.png', MemoryStream);
+    //LoadFromStream(HttpClient.Response.ContentType, MemoryStream);
+    MemoryStream.SaveToFile(Application.Location + '1.png');
+  finally
+    HttpClient.Free;
+    MemoryStream.Free;
+  end;
+  //LogEdit.Lines.Add('Finished');
+end;
+
+procedure TMainForm.Button3Click(Sender: TObject);
+var
+  HttpClient: TmnHttpClient;
+  MemoryStream: TMemoryStream;
+begin
+  MemoryStream := TMemoryStream.Create;
+  HttpClient := TmnHttpClient.Create;
+  try
+    HttpClient.UserAgent := sUserAgent;
+    //HttpClient.Compressing := True;
+    HttpClient.Open('http://uk7.internet-radio.com:8226/live');
+    //HttpClient.GetMemoryStream('http://uk7.internet-radio.com:8226/live  ', MemoryStream);
+    LogEdit.Lines.Add(HttpClient.Response.ContentType);
+    //LoadFromStream(HttpClient.Response.ContentType, MemoryStream);
   finally
     HttpClient.Free;
     MemoryStream.Free;
@@ -128,7 +175,7 @@ begin
   Application.ProcessMessages;
   HttpClient := TmnHttpClient.Create;
   try
-    HttpClient.Request.UserAgent := sUserAgent;
+    HttpClient.UserAgent := sUserAgent;
     //HttpClient.KeepAlive := True;
     HttpClient.Host := 'www.parmaja.org';
     HttpClient.Open(sURL2, False);
@@ -154,16 +201,19 @@ begin
   MemoryStream := TMemoryStream.Create;
   HttpClient := TmnHttpClient.Create;
   try
-    HttpClient.Request.UserAgent := sUserAgent;
+    HttpClient.UserAgent := sUserAgent;
     HttpClient.KeepAlive := True;
     //HttpClient.Connect('https://www.openstreetmap.org', False);
-    HttpClient.Open('https://www.parmaja.org', False);
+    //https://c.tile.openstreetmap.fr/osmfr/14/9765/6391.png
+    //https://c.tile.openstreetmap.de/14/9765/6391.png
+    HttpClient.Open('https://c.tile.openstreetmap.org/14/9765/6391.png', False);
 
     HttpClient.Request.SendGet;
     HttpClient.Response.Receive;
     HttpClient.ReceiveMemoryStream(MemoryStream);
     MemoryStream.Position := 0;
-    MemoryStream.SaveToFile('c:\temp\1.html');
+    LoadFromStream(HttpClient.Response.ContentType, MemoryStream);
+    //MemoryStream.SaveToFile(Application.Location + '1.html');
     HttpClient.Disconnect;
   finally
     HttpClient.Free;
@@ -186,7 +236,7 @@ begin
   MemoryStream := TMemoryStream.Create;
   HttpClient := TmnHttpClient.Create;
   try
-    HttpClient.Request.UserAgent := sUserAgent;
+    HttpClient.UserAgent := sUserAgent;
     HttpClient.KeepAlive := True;
     HttpClient.Open(sURL, False);
     HttpClient.Host := 'www.parmaja.org';
@@ -229,6 +279,60 @@ procedure TMainForm.LogEvent(S: String);
 begin
   LogEdit.Lines.Add(S);
 end;
+
+{function GetUrlData(const Url: string): TMemoryStream;
+var
+  n: THTTPClient;
+  t: TmnHttpClient;
+  c: string;
+  r: IHTTPResponse;
+  h: TNetHeaders;
+begin
+  Result := TMemoryStream.Create;
+  if Url<>'' then
+  begin
+    {t := TmnHttpClient.Create;
+    try
+      t.Compressing := True;
+      //t.ConnectionTimeout := 600;
+      //t.ResponseTimeout := 600;
+      //t.Request.UserAgent := 'Embarcadero URI Client/1.0';
+      t.Request.UserAgent := 'curl/7.55.1';
+      t.GetStream(Url, Result);
+    finally
+      t.Free;
+    end;}
+    //System.TMonitor.Enter(mapMapClasses);
+
+    LogBeginTickDebug;
+    n := THTTPClient.Create;
+    try
+      n.AcceptEncoding := 'gzip, deflate';
+      //n.ConnectionTimeout := 600;
+      //n.ResponseTimeout := 600;
+      n.ConnectionTimeout := 300;
+      n.ResponseTimeout := 3000;
+      //n.UserAgent := 'Mozilla/5.0 (Windows NT 10.0; WOW64; rv:56.0) Gecko/20100101 Firefox/56.0';
+      n.UserAgent := 'curl/7.55.1';
+
+      try
+        r := n.Get(Url, Result);
+        h := r.Headers;
+
+        c := 'succ';
+      except
+        c := 'fail';
+        Result.Clear;
+      end;
+
+    finally
+      LogEndTick('%s [%s]', [c, Url]);
+      n.Free;
+      //System.TMonitor.Exit(mapMapClasses);
+    end;
+  end;
+end;}
+
 
 end.
 

@@ -5,6 +5,7 @@ unit mncConnections;
  * @license   modifiedLGPL (modified of http://www.gnu.org/licenses/lgpl.html)
  *            See the file COPYING.MLGPL, included in this distribution,
  * @author    Zaher Dirkey <zaher, zaherdirkey>
+ * @author    Belal Hamad <belal, hamad>
  *}
 
 {$M+}
@@ -150,6 +151,7 @@ type
     property Password: string read FServerInfo.Password write FServerInfo.Password;
     property Role: string read FServerInfo.Role write FServerInfo.Role;
     property ServerInfo: TmncServerInfo read FServerInfo write SetServerInfo;
+    property StartCount: Integer read FStartCount;
 
     property Params: TStrings read FParams write SetParams;
     property OnConnected: TNotifyEvent read FOnConnected write FOnConnected;
@@ -158,18 +160,18 @@ type
 
   TmncConnectionClass = class of TmncConnection;
 
-  {
-    sbhStrict: Without it, it no need to call Start and Stop (Commit/Rollback) this DB automatically do it (pg/SQLite allow it)
-    sbhMultiple: Multiple Transactions works simultaneously, Every session have transacion like as Firebird
-    sbhEmulate:  Single transaction(main connection) but last session commited make the real commit, maybe PG/SQLite
-
-    sbhIndependent: This session have independent resources, maybe open new connection separated from the main one, or other database file, not sure
-  }
-  TmncSessionBehavior = (sbhStrict, sbhIndependent, sbhMultiple, sbhEmulate);
+  TmncSessionBehavior = (
+    sbhStrict, //Without it, it no need to call Start and Stop (Commit/Rollback) this DB automatically do it (pg/SQLite allow it)
+    sbhMultiple, //Multiple Transactions works simultaneously, Every session have transacion like as Firebird
+    sbhEmulate //or Virtual, a Single transaction(main connection) many start last stop, maybe PG/SQLite
+  );
   TmncSessionBehaviors = set of TmncSessionBehavior;
 
   //Session it is branch/clone of Connection but usefull for take a special params, it is like Transactions.
-  TmncSessionAction = (sdaCommit, sdaRollback);
+  TmncSessionAction = (
+    sdaCommit,
+    sdaRollback
+  );
 
   { TmncSession }
 
@@ -220,7 +222,7 @@ type
   end;
 
   TmncDataType = (dtUnknown, dtString, dtBoolean, dtInteger, dtCurrency, dtFloat, dtDate, dtTime, dtDateTime, dtMemo, dtBlob, dtBig {bigint or int64}{, dtEnum, dtSet});
-  TmncBlobType = (blobBinary, blobText);
+  TmncSubType = (dstBinary, dstImage, dstText, dstXML, dstJSON);
 
 {
   TmncItem base class for Column and Field and Param
@@ -276,6 +278,7 @@ type
     FMetaType: string;
     FScale: Word;
     FSize: Int64;
+    FSubType: TmncSubType;
   protected
     procedure SetIsNull(const AValue: Boolean); override;
     function GetIsNull: Boolean; override;
@@ -296,7 +299,7 @@ type
     property Decimals: Integer read FDecimals write SetDecimals;
     property Options: TmnDataOptions read FOptions write FOptions default [];
     //property IsBlob;
-    //property BlobType;
+    property SubType: TmncSubType read FSubType write FSubType;
     property MaxSize: Integer read FMaxSize write FMaxSize;
   end;
 
@@ -353,14 +356,11 @@ type
   TmncCustomFields = class(TmncItems)
   private
     function GetItem(Index: Integer): TmncCustomField;
-    function GetValue(const Index: string): Variant;
-    procedure SetValue(const Index: string; const Value: Variant);
   protected
     //Called before release it, good to deattach the handles
     procedure Detach; virtual;
   public
     property Items[Index: Integer]: TmncCustomField read GetItem;
-    property Values[const Index: string]: Variant read GetValue write SetValue;
   end;
 
   TmncRecord = class(TmncCustomFields)
@@ -474,6 +474,7 @@ type
 
   //TODO not yet
   TmncCommandOption = (
+    cmdReplaceParams, //replace param in sql text instead pass it to SQL engine
     cmoTruncate, //Truncate the string to fit into field size, not recomended if you are strict, you will lose data
     cmoCorrectDate //Correct DateTime fields to be compatiple with SQL and Pascal
   );
@@ -558,13 +559,13 @@ type
     procedure Prepare;
     function Execute: Boolean;
     function Next: Boolean;
-    function Done: Boolean;
     function Step: Boolean; //Execute and Next for while loop() without using next at end of loop block //TODO not yet
     procedure Close;
     procedure Clear; virtual;
     procedure Commit;
     procedure Rollback;
     //Detach make Fields or Params unrelated to DB handles, you can use them in salfty in arrays
+    property Done: Boolean read GetDone;
     function DetachFields: TmncFields;
     function DetachParams: TmncParams;
     function FieldIsExist(const Name: string): Boolean;
@@ -913,11 +914,6 @@ begin
   FParams := CreateParams;
   FBinds := CreateBinds;
   FNextOnExecute := True;
-end;
-
-function TmncCommand.Done: Boolean;
-begin
-  Result := GetDone;
 end;
 
 function TmncCommand.Step: Boolean;
@@ -1570,8 +1566,6 @@ begin
   Result := Add(aItem);
 end;
 
-{ TCustomField }
-
 { TmncColumn }
 
 procedure TmncColumn.SetSize(AValue: Int64);
@@ -1673,16 +1667,6 @@ end;
 function TmncRecord.GetItemByName(const Index: string): TmncCustomField;
 begin
   Result := ItemByName(Index) as TmncCustomField;
-end;
-
-function TmncCustomFields.GetValue(const Index: string): Variant;
-begin
-  Result := ItemByName(Index).Value;
-end;
-
-procedure TmncCustomFields.SetValue(const Index: string; const Value: Variant);
-begin
-  ItemByName(Index).Value := Value;
 end;
 
 procedure TmncCustomFields.Detach;
