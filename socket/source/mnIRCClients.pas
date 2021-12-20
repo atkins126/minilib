@@ -7,8 +7,7 @@ unit mnIRCClients;
 {$ENDIF}
 {**
  *  This file is part of the "Mini Library"
- *  @license  modifiedLGPL (modified of http://www.gnu.org/licenses/lgpl.html)
- *            See the file COPYING.MLGPL, included in this distribution,
+ *  @license  MIT (https://opensource.org/licenses/MIT)
  *  @author by Zaher Dirkey <zaher, zaherdirkey>
 
 
@@ -36,6 +35,9 @@ PREFIX=(ov)@+
 
 Flag as operator directly
 /msg chanserv flags #parmaja zaher +O
+
+fix topic changing
+<:zaher_!~zaher@188.229.231.11 TOPIC #parmaja :Open source and free projects of www.parmaja.org and github/parmaja
 
 }
 
@@ -346,7 +348,7 @@ type
     FStream: TIRCSocketStream;
 
     FDelayEvent: TEvent;
-    FIsOpen: Boolean; //End user started or stopped it
+    FActive: Boolean; //End user started or stopped it
     FInternalConnected: Boolean; //True if connected, used to detected disconnected after connect
 
     Tries: Integer;
@@ -365,12 +367,12 @@ type
 
     property Client: TmnIRCClient read FClient;
     function GetConnected: Boolean; override;
-    property IsOpen: Boolean read FIsOpen;
+    property Active: Boolean read FActive;
+    procedure TerminatedSet; override;
   public
     constructor Create(vOwner: TmnConnections);
     destructor Destroy; override;
     procedure Connect;
-    procedure Stop; override;
     property Host: string read FHost;
     property Port: string read FPort;
   end;
@@ -390,18 +392,19 @@ type
     procedure SetNick(ANick: string);
   end;
 
-  TIRCAuth = (authNone, authPASS, authIDENTIFY);
+  TIRCAuthType = (authNone = 0, authPASS, authIDENTIFY);
 
   { TmnIRCClient }
 
   TmnIRCClient = class(TObject)
   private
-    FAuth: TIRCAuth;
+    FAuthType: TIRCAuthType;
     FMapChannels: TStringList;
     FPort: string;
     FHost: string;
     FPassword: string;
     FReconnectTime: Integer;
+    FTitle: string;
     FUsername: string;
     FRealName: string;
     FProgress: TIRCProgress;
@@ -415,10 +418,10 @@ type
     FUseUserCommands: Boolean;
     FNicks: TStringList;
 
-    function GetIsOpen: Boolean;
+    function GetActive: Boolean;
     function GetOnline: Boolean;
 
-    procedure SetAuth(AValue: TIRCAuth);
+    procedure SetAuthType(AValue: TIRCAuthType);
     procedure SetMapChannels(AValue: TStringList);
     procedure SetNicks(AValue: TStringList);
     procedure SetPassword(const Value: string);
@@ -472,9 +475,11 @@ type
     procedure DoWho(vChannel: string); virtual;
     procedure DoMyInfoChanged; virtual;
 
-    procedure GetCurrentChannel(out vChannel: string); virtual;
     function MapChannel(vChannel: string): string;
 
+    procedure DoBeforeOpen; virtual;
+    procedure DoAfterOpen; virtual;
+    procedure DoAfterClose; virtual;
     procedure Init; virtual;
     procedure CreateConnection;
     property Connection: TmnIRCConnection read FConnection;
@@ -506,9 +511,10 @@ type
     property Receivers: TIRCReceivers read FReceivers;
     property QueueSends: TIRCQueueRaws read FQueueSends;
     property UserCommands: TIRCUserCommands read FUserCommands;
-    property IsOpen: Boolean read GetIsOpen;
+    property Active: Boolean read GetActive;
     property Online: Boolean read GetOnline;
   public
+    property Title: string read FTitle write FTitle; //A Title name of Server, like 'freenode' or 'libra'
     property Host: string read FHost write SetHost;
     property Port: string read FPort write SetPort;
     property UseSSL: Boolean read FUseSSL write SetUseSSL;
@@ -520,7 +526,7 @@ type
     property MapChannels: TStringList read FMapChannels write SetMapChannels;
     property UseUserCommands: Boolean read FUseUserCommands write FUseUserCommands default True;
     property ReconnectTime: Integer read FReconnectTime write SetReconnectTime;
-    property Auth: TIRCAuth read FAuth write SetAuth;
+    property AuthType: TIRCAuthType read FAuthType write SetAuthType;
   end;
 
   { TIRCUserReceiver }
@@ -599,6 +605,14 @@ type
   { TQUIT_IRCReceiver }
 
   TQUIT_IRCReceiver = class(TIRCReceiver)
+  protected
+    procedure DoExecute(vCommand: TIRCCommand; var NextCommand: TIRCQueueCommand); override;
+    procedure Receive(vCommand: TIRCCommand); override;
+  end;
+
+  { TTOPIC_RPL_IRCReceiver }
+
+  TTOPIC_RPL_IRCReceiver = class(TIRCReceiver)
   protected
     procedure DoExecute(vCommand: TIRCCommand; var NextCommand: TIRCQueueCommand); override;
     procedure Receive(vCommand: TIRCCommand); override;
@@ -794,6 +808,9 @@ uses
 
 const
   sDefaultPort = '6667';
+  sDefaultSSLPort = '6697';
+  sLiberaChat = 'irc.libera.chat';
+  sFreeNode = 'irc.freenode.net';
 
 function ScanString(vStr: string; var vPos:Integer; out vCount: Integer; vChar: Char; vSkip: Boolean = False): Boolean;
 var
@@ -983,14 +1000,26 @@ begin
     Result := Copy(Address, 1, EndOfNick - 1);
 end;
 
+{ TTOPIC_IRCReceiver }
+
+procedure TTOPIC_IRCReceiver.DoExecute(vCommand: TIRCCommand; var NextCommand: TIRCQueueCommand);
+begin
+  //:zaherdirkey!~zaherdirkey@myip TOPIC #support :Creative Solutions Support Channel2
+  vCommand.Channel := vCommand.PullParam;
+  vCommand.Msg := vCommand.PullParam;
+  vCommand.Target := vCommand.Channel;
+end;
+
+procedure TTOPIC_IRCReceiver.Receive(vCommand: TIRCCommand);
+begin
+  Client.Receive(mtTopic, vCommand.Received);
+end;
+
 { TTopic_UserCommand }
 
 procedure TTopic_UserCommand.Send(vChannel: string; vMsg: string);
-var
-  aChannel: string;
 begin
-  Client.GetCurrentChannel(aChannel);
-  Client.SendRaw('TOPIC ' + aChannel + ' ' + vMsg, prgReady);
+  Client.SendRaw('TOPIC ' + vChannel + ' ' + vMsg, prgReady);
 end;
 
 { TDCC_IRCReceiver }
@@ -1146,11 +1175,8 @@ end;
 { TPart_UserCommand }
 
 procedure TPart_UserCommand.Send(vChannel: string; vMsg: string);
-var
-  aChannel: string;
 begin
-  Client.GetCurrentChannel(aChannel);
-  Client.SendRaw('PART ' + aChannel + ' :' + vMsg, prgReady);
+  Client.SendRaw('PART ' + vChannel + ' :' + vMsg, prgReady);
 end;
 
 { TIRCSession }
@@ -1428,10 +1454,6 @@ end;
 
 procedure TNAMREPLY_IRCReceiver.Receive(vCommand: TIRCCommand);
 var
-  aUserName: string;
-  aModes: TIRCUserModes;
-  aUser: TIRCUser;
-
   aChannelName: string;
   oChannel: TIRCChannel;
 
@@ -1628,20 +1650,19 @@ begin
   end;
 end;
 
-{ TTOPIC_IRCReceiver }
+{ TTOPIC_RPL_IRCReceiver }
 
-procedure TTOPIC_IRCReceiver.DoExecute(vCommand: TIRCCommand; var NextCommand: TIRCQueueCommand);
+procedure TTOPIC_RPL_IRCReceiver.DoExecute(vCommand: TIRCCommand; var NextCommand: TIRCQueueCommand);
 begin
   inherited;
   //:server 332 zaher #support :Creative Solutions Support Channel
-  //:zaherdirkey!~zaherdirkey@myip TOPIC #support :Creative Solutions Support Channel2
   vCommand.User := vCommand.PullParam;
   vCommand.Target := vCommand.PullParam;
   vCommand.Channel := vCommand.Target;
   vCommand.Msg := vCommand.PullParam;
 end;
 
-procedure TTOPIC_IRCReceiver.Receive(vCommand: TIRCCommand);
+procedure TTOPIC_RPL_IRCReceiver.Receive(vCommand: TIRCCommand);
 begin
   Client.Receive(mtTopic, vCommand.Received);
 end;
@@ -1724,12 +1745,12 @@ function TmnIRCConnection.InitStream: Boolean;
 var
   ReconnectTime: Integer;
 begin
-  if (FStream = nil) and IsOpen then
+  if (FStream = nil) and Active then
     FStream := CreateStream;
 
   if not Terminated then
   begin
-    if not FStream.Connected and IsOpen then
+    if not FStream.Connected and Active then
     begin
       try
         if Tries > 0 then //delay if not first time
@@ -1740,12 +1761,12 @@ begin
           finally
             Lock.Leave;
           end;
-          Log('Reconnecting after ' + IntToStr(ReconnectTime));
+          Log('Reconnecting  '+ Host +' after ' + IntToStr(ReconnectTime));
           FDelayEvent.WaitFor(ReconnectTime);
-          Log('Reconnecting...');
+          Log('Reconnecting '+ Host +'...');
         end
         else
-          Log('Connecting...');
+          Log('Connecting '+ Host +' ...');
         Queue(Client.Connecting);
         FStream.Connect;
         if FStream.Connected then
@@ -1838,11 +1859,10 @@ begin
   begin
     try
       SendRaws;
-
-      FStream.ReadLineUTF8(S, True);
+      if FStream.Connected then
+        FStream.ReadLineUTF8(S, True);
       aLine := Trim(UTF8ToString(S));
-
-      while (aLine <> '') and not Terminated do
+      while Connected and not Terminated and (aLine <> '') do
       begin
         Log('<' + aLine);
         aNextCommand := nil;
@@ -1860,7 +1880,7 @@ begin
 
         SendRaws;
 
-        if not Terminated then
+        if FStream.Connected and not Terminated then
         begin
           FStream.ReadLineUTF8(S, True);
           aLine := Trim(UTF8ToString(S));
@@ -1881,7 +1901,7 @@ begin
   inherited;
   Tries := 0;
   if Connected then
-    Stop;
+    Terminate;
   Synchronize(Client.Closed);
   FreeAndNil(FStream);
 end;
@@ -2037,6 +2057,15 @@ begin
   Result := not Terminated;
 end;
 
+procedure TmnIRCConnection.TerminatedSet;
+begin
+  inherited;
+  if FDelayEvent <> nil then
+    FDelayEvent.SetEvent;
+  if FStream <> nil then
+    FStream.Disconnect;
+end;
+
 constructor TmnIRCConnection.Create(vOwner: TmnConnections);
 begin
   inherited;
@@ -2052,15 +2081,6 @@ end;
 procedure TmnIRCConnection.Connect;
 begin
   inherited;
-end;
-
-procedure TmnIRCConnection.Stop;
-begin
-  inherited;
-  if FDelayEvent <> nil then
-    FDelayEvent.SetEvent;
-  if FStream <> nil then
-    FStream.Disconnect;
 end;
 
 { TIRCCommand }
@@ -2155,19 +2175,21 @@ procedure TmnIRCClient.Close;
 begin
   if Assigned(FConnection) then
   begin
-    Connection.FIsOpen := False;
+    Connection.FActive := False; //do not reconnect
+
     if (FConnection.Connected) then
       Quit('Bye');
 
-    FConnection.Terminate;//no stop
-    FConnection.Stop; //should use TerminateSet, but not exists in FPC yet
+    FConnection.Terminate;
     FConnection.WaitFor;
   end;
   NickIndex := 0;
+  DoAfterClose;
 end;
 
 procedure TmnIRCClient.Open;
 begin
+  DoBeforeOpen;
   NickIndex := 0;
   if (Progress < prgConnecting) then
   begin
@@ -2175,9 +2197,10 @@ begin
       InitOpenSSL;
     FreeAndNil(FConnection);
     CreateConnection;
-    Connection.FIsOpen := True;
+    Connection.FActive := True;
     Connection.Start;
   end;
+  DoAfterOpen;
 end;
 
 constructor TmnIRCClient.Create;
@@ -2438,12 +2461,12 @@ begin
   SendRaw(Format('USER %s 0 * :%s', [Username, RealName]));
   if FPassword <> '' then
   begin
-    if Auth = authPass then
+    if AuthType = authPass then
     begin
       SendRaw(Format('PASS %s:%s', [Username, FPassword]));
       SetNick(aNick);
     end
-    else if Auth = authIDENTIFY then
+    else if AuthType = authIDENTIFY then
     begin
       SetNick(aNick);
       SendRaw(Format('NICKSERV IDENTIFY %s %s', [Username, Password]));
@@ -2485,18 +2508,18 @@ end;
 
 function TmnIRCClient.GetOnline: Boolean;
 begin
-  Result := (FConnection <> nil) and FConnection.Connected and FConnection.IsOpen and (Progress > prgConnected);
+  Result := (FConnection <> nil) and FConnection.Connected and FConnection.Active and (Progress > prgConnected);
 end;
 
-function TmnIRCClient.GetIsOpen: Boolean;
+function TmnIRCClient.GetActive: Boolean;
 begin
-  Result := (FConnection <> nil) and FConnection.IsOpen;
+  Result := (FConnection <> nil) and FConnection.Active;
 end;
 
-procedure TmnIRCClient.SetAuth(AValue: TIRCAuth);
+procedure TmnIRCClient.SetAuthType(AValue: TIRCAuthType);
 begin
-  if FAuth =AValue then Exit;
-  FAuth :=AValue;
+  if FAuthType =AValue then Exit;
+  FAuthType :=AValue;
 end;
 
 procedure TmnIRCClient.SetMapChannels(AValue: TStringList);
@@ -2605,11 +2628,6 @@ begin
 
 end;
 
-procedure TmnIRCClient.GetCurrentChannel(out vChannel: string);
-begin
-  vChannel := '';
-end;
-
 function TmnIRCClient.MapChannel(vChannel: string): string;
 begin
   if MapChannels.IndexOfName(vChannel) >=0 then
@@ -2620,6 +2638,19 @@ begin
   end
   else
     Result := vChannel
+end;
+
+procedure TmnIRCClient.DoBeforeOpen;
+begin
+end;
+
+procedure TmnIRCClient.DoAfterOpen;
+begin
+end;
+
+procedure TmnIRCClient.DoAfterClose;
+begin
+
 end;
 
 procedure TmnIRCClient.Quit(Reason: string);
@@ -2732,7 +2763,7 @@ begin
   Receivers.Add('PING', [], TPING_IRCReceiver);
 
   Receivers.Add('MOTD', [IRC_RPL_MOTD], TMOTD_IRCReceiver);
-  Receivers.Add('', [IRC_RPL_TOPIC], TTOPIC_IRCReceiver);
+  Receivers.Add('', [IRC_RPL_TOPIC], TTOPIC_RPL_IRCReceiver);
   Receivers.Add('TOPIC', [], TTOPIC_IRCReceiver);//not same with IRC_RPL_TOPIC
   Receivers.Add('NICK', [], TNICK_IRCReceiver);
   Receivers.Add('WELCOME', [IRC_RPL_WELCOME], TWELCOME_IRCReceiver);
@@ -2758,6 +2789,7 @@ begin
   UserCommands.Add(TMode_UserCommand.Create('Mode', Self));
   UserCommands.Add(TSend_UserCommand.Create('Send', Self));
   UserCommands.Add(TTopic_UserCommand.Create('Topic', Self));
+  UserCommands.Add(TTopic_UserCommand.Create('t', Self));
   UserCommands.Add(TMe_UserCommand.Create('Me', Self));
   UserCommands.Add(TNotice_UserCommand.Create('Notice', Self));
   UserCommands.Add(TCNotice_UserCommand.Create('CNotice', Self));
@@ -2776,7 +2808,15 @@ begin
   FConnection.FClient := Self;
   FConnection.FreeOnTerminate := false;
   FConnection.FHost := Host;
-  FConnection.FPort := Port;
+  if Port = '' then
+  begin
+    if UseSSL then
+      FConnection.FPort := sDefaultSSLPort
+    else
+      FConnection.FPort := sDefaultPort;
+  end
+  else
+    FConnection.FPort := Port;
 end;
 
 end.

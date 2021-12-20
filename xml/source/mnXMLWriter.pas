@@ -18,47 +18,130 @@ interface
 uses
   Classes, SysUtils, mnXML, mnXMLUtils;
 
+const
+  cMaxLine = 40;
+
 type
-  TmnXMLWriter = class(TmnXMLFiler)
+
+  { TmnCustomXMLWriter }
+
+  TmnCustomXMLWriter = class(TmnXMLFiler)
   private
+    FBreaks: Boolean;
     FOpenedTags: TStringList;
     FSmart: Boolean;
     FTabs: string;
     FEncoding: Boolean;
     FTaging: Boolean;
     FTagStarted: Boolean; //Work with StartTag
+    AttributesCount: Integer;
     procedure SetSmart(const Value: Boolean);
   protected
     procedure DoStart; override;
     procedure DoStop; override;
     procedure WriteHeader;
     function CharsetEncode(const Value: string): string;
+
+    procedure DoWriteStartTag(Name: string); virtual; abstract;
+    procedure DoWriteAttribute(Name, Value: string); virtual; abstract;
+    procedure DoWriteStopTag(Name: string; CloseIt: Boolean); virtual; abstract;
+    procedure DoWriteCloseTag(Name: string); virtual; abstract;
+    procedure DoWriteText(Value: string); virtual; abstract;
+    procedure DoWriteComment(Value: string); virtual; abstract;
+    procedure DoWriteCDATA(Value: string); virtual; abstract;
+
   public
     constructor Create; override;
     destructor Destroy; override;
     //Return tabs/spaces to put before write line in smart mode
-    function GetIndents: string;
+    function GetIndents: string; overload;
+    function GetIndents(Count: Integer): string; overload;
     //WriteStartTag like <name wotk wit StopTag
     //without add attribute and te > sign
-    procedure WriteStartTag(const Name: string);
-    procedure WriteAttributes(const Attributes: string = '');
+    procedure StartTag(NameSpace, Name: string); overload;
+    procedure StartTag(Name: string); overload;
+    procedure AddAttribute(Name, Value: string);
+    procedure AddAttributes(AttNames, AttValues: TStringArray);
+    procedure AddXMLNS(NameSpace, Value: string); overload;
     //StopTag add attribute and close it by > or /> if empty = true
-    procedure WriteStopTag(Empty: Boolean = False; const Attributes: string = '');
+    procedure StopTag(NameSpace, Name: string; CloseIt: Boolean = False); overload;
+    procedure StopTag(Name: string); overload;
+    procedure StopTag; overload;
+
     //OpenTag add Tag with attributes <name att1="val1">
-    procedure WriteOpenTag(const Name: string; const Attributes: string = '');
+    //procedure WriteOpenTag(const Name, NameSpace: string); overload;
+    procedure OpenTag(NameSpace, Name: string; AttNames, AttValues: TStringArray; CloseIt: Boolean = False); overload;
+    procedure OpenTag(Name: string; AttNames, AttValues: TStringArray); overload;
+    procedure OpenTag(NameSpace, Name: string; AttName, AttValue: string); overload;
+    procedure OpenTag(Name: string; AttName, AttValue: string); overload;
+    procedure OpenTag(NameSpace, Name: string); overload;
+    procedure OpenTag(Name: string); overload;
     //CloseTag work with WriteStartTag and WriteOpenTag
-    procedure WriteCloseTag(Name: string = '');
-    procedure WriteEmptyTag(Name: string);
-    procedure WriteText(Value: string);
-    procedure Write(const Name, Value: string; const Attributes: string = '');
-    procedure WriteComment(Value: string);
+    procedure CloseTag(NameSpace, Name: string); overload;
+    procedure CloseTag(Name: string); overload;
+    procedure CloseTag; overload;
+    //Add closed tage
+    procedure AddTag(NameSpace, Name: string; AttNames, AttValues: TStringArray); overload;
+    procedure AddTag(NameSpace, Name: string; AttName, AttValue: string); overload;
+    procedure AddTag(Name: string); overload;
+    //Add Closed tag with text
+    //If Text is empty tag will NOT added
+    procedure AddText(NameSpace, TagName, Text: string; AttNames: TStringArray = []; AttValues: TStringArray = []); overload;
+    procedure AddText(TagName, Text: string); overload;
+    //Add Text value only
+    procedure AddText(Value: string);
+    procedure AddComment(Value: string);
+    procedure AddCommentLine(Value: string);
+    procedure AddCDATA(Value: string);
     //States
     property TagStarted: Boolean read FTagStarted;
     //Smart engine
     property Smart: Boolean read FSmart write SetSmart default False;
     property Encoding: Boolean read FEncoding write FEncoding default True;
     property Tabs: string read FTabs write FTabs;
+    property Breaks: Boolean read FBreaks write FBreaks; //auto break everyrhing, but hearts :)
     //End smart engine
+  end;
+
+  TmnCustomXMLWriterClass = class of TmnCustomXMLWriter;
+
+  { TmnXMLWriter }
+
+  TmnXMLWriter = class(TmnCustomXMLWriter)
+  protected
+    procedure DoWriteStartTag(Name: string); override;
+    procedure DoWriteAttribute(Name, Value: string); override;
+    procedure DoWriteStopTag(Name: string; CloseIt: Boolean); override;
+    procedure DoWriteCloseTag(Name: string); override;
+    procedure DoWriteText(Value: string); override;
+    procedure DoWriteComment(Value: string); override;
+    procedure DoWriteCDATA(Value: string); override;
+  end;
+
+  { TmnPascalWriter }
+
+  TmnPascalWriter = class(TmnCustomXMLWriter)
+  protected
+    procedure DoWriteStartTag(Name: string); override;
+    procedure DoWriteAttribute(Name, Value: string); override;
+    procedure DoWriteStopTag(Name: string; CloseIt: Boolean); override;
+    procedure DoWriteCloseTag(Name: string); override;
+    procedure DoWriteText(Value: string); override;
+    procedure DoWriteComment(Value: string); override;
+    procedure DoWriteCDATA(Value: string); override;
+  end;
+
+  { TmnJSONWriter }
+
+  TmnJSONWriter = class(TmnCustomXMLWriter) //for fun
+  protected
+    procedure DoWriteStartTag(Name: string); override;
+    procedure DoWriteAttribute(Name, Value: string); override;
+    procedure DoWriteStopTag(Name: string; CloseIt: Boolean); override;
+    procedure DoWriteCloseTag(Name: string); override;
+    procedure DoWriteText(Value: string); override;
+    procedure DoWriteComment(Value: string); override;
+    procedure DoWriteCDATA(Value: string); override;
   end;
 
 implementation
@@ -66,32 +149,144 @@ implementation
 uses
   mnUtils;
 
-{ TmnXMLWriter }
+{ TmnPascalWriter }
 
-procedure TmnXMLWriter.WriteCloseTag(Name: string);
+procedure TmnPascalWriter.DoWriteStartTag(Name: string);
 begin
-  if FSmart then
-  begin
-    if Name = '' then
-    begin
-      Name := FOpenedTags[FOpenedTags.Count - 1];
-      FOpenedTags.Delete(FOpenedTags.Count - 1);
-    end
-    else
-    begin
-      if (FOpenedTags.Count = 0) or (FOpenedTags[FOpenedTags.Count - 1] <> Name) then //not the last tag
-        raise EmnXMLException.Create('Tag name must not close now');
-      FOpenedTags.Delete(FOpenedTags.Count - 1);
-    end;
-  end;
-  if Smart and FTaging and (Tabs <> '') then
-    Stream.WriteString(Stream.EndOfLine + GetIndents + '</' + Name + '>')
-  else
-    Stream.WriteString('</' + Name + '>');
-  FTaging := True;
+  Stream.WriteString('AddStartTag(' + QuoteStr(Name, '''') + ');') ;
 end;
 
-constructor TmnXMLWriter.Create;
+procedure TmnPascalWriter.DoWriteAttribute(Name, Value: string);
+begin
+  Stream.WriteString('AddAttribute(' + QuoteStr(Name, '''') + ', ' + QuoteStr(Name, '''') + ');') ;
+end;
+
+procedure TmnPascalWriter.DoWriteStopTag(Name: string; CloseIt: Boolean);
+begin
+  if CloseIt then
+    Stream.WriteString('StopTag(' + QuoteStr(Name, '''') + ');') //TODO
+  else
+    Stream.WriteString('StopTag(' + QuoteStr(Name, '''') + ');') ;
+end;
+
+procedure TmnPascalWriter.DoWriteCloseTag(Name: string);
+begin
+  Stream.WriteString('CloseTag(' + QuoteStr(Name, '''') + ');') ;
+end;
+
+procedure TmnPascalWriter.DoWriteText(Value: string);
+begin
+  Stream.WriteString('AddText(' + QuoteStr(Value, '''') + ');') ;
+end;
+
+procedure TmnPascalWriter.DoWriteComment(Value: string);
+begin
+  Stream.WriteString('AddComment(' + QuoteStr(Value, '''') + ');') ;
+end;
+
+procedure TmnPascalWriter.DoWriteCDATA(Value: string);
+begin
+  Stream.WriteString('AddCDATA(' + QuoteStr(Value, '''') + ');') ;
+end;
+
+{ TmnJSONWriter }
+
+procedure TmnJSONWriter.DoWriteStartTag(Name: string);
+begin
+  Stream.WriteString(QuoteStr(Name) + ' = {');
+end;
+
+procedure TmnJSONWriter.DoWriteAttribute(Name, Value: string);
+begin
+  Stream.WriteString(QuoteStr(Name) + ' = ' + QuoteStr(Value));
+end;
+
+procedure TmnJSONWriter.DoWriteStopTag(Name: string; CloseIt: Boolean);
+begin
+  //Stream.WriteString(Name + '}');
+end;
+
+procedure TmnJSONWriter.DoWriteCloseTag(Name: string);
+begin
+  Stream.WriteString('}');
+end;
+
+procedure TmnJSONWriter.DoWriteText(Value: string);
+begin
+  DoWriteAttribute('Value', Value);
+end;
+
+procedure TmnJSONWriter.DoWriteComment(Value: string);
+begin
+end;
+
+procedure TmnJSONWriter.DoWriteCDATA(Value: string);
+begin
+end;
+
+{ TmnXMLWriter }
+
+procedure TmnXMLWriter.DoWriteStartTag(Name: string);
+begin
+  Stream.WriteString('<' + Name);
+end;
+
+procedure TmnXMLWriter.DoWriteAttribute(Name, Value: string);
+begin
+  Stream.WriteString(Name+'=' + QuoteStr(EntityEncode(Value)));
+end;
+
+procedure TmnXMLWriter.DoWriteStopTag(Name: string; CloseIt: Boolean);
+begin
+  if CloseIt then
+    Stream.WriteString('/>')
+  else
+    Stream.WriteString('>');
+end;
+
+procedure TmnXMLWriter.DoWriteCloseTag(Name: string);
+begin
+  Stream.WriteString('</' + Name + '>');
+end;
+
+procedure TmnXMLWriter.DoWriteText(Value: string);
+begin
+  Stream.WriteString(EntityEncode(Value));
+end;
+
+procedure TmnXMLWriter.DoWriteComment(Value: string);
+begin
+  Stream.WriteString('<!--' + EntityEncode(Value) + '-->');
+end;
+
+procedure TmnXMLWriter.DoWriteCDATA(Value: string);
+begin
+  Stream.WriteString('<![CDATA[' + EntityEncode(Value) + ']]');
+end;
+
+{ TmnCustomXMLWriter }
+
+procedure TmnCustomXMLWriter.CloseTag(Name: string);
+begin
+  CloseTag('', Name);
+end;
+
+procedure TmnCustomXMLWriter.CloseTag;
+begin
+  CloseTag('');
+end;
+
+procedure TmnCustomXMLWriter.AddTag(NameSpace, Name: string; AttNames, AttValues: TStringArray);
+begin
+  OpenTag(NameSpace, Name, AttNames, AttValues, True);
+end;
+
+procedure TmnCustomXMLWriter.AddTag(NameSpace, Name: string; AttName, AttValue: string);
+begin
+  AddTag(NameSpace, Name, [AttName], [AttValue]);
+end;
+
+constructor TmnCustomXMLWriter.Create;
 begin
   inherited Create;
   FOpenedTags := TStringList.Create;
@@ -99,28 +294,50 @@ begin
   FEncoding := True;
 end;
 
-destructor TmnXMLWriter.Destroy;
+destructor TmnCustomXMLWriter.Destroy;
 begin
   FOpenedTags.Free;
   inherited;
 end;
 
-procedure TmnXMLWriter.DoStop;
+procedure TmnCustomXMLWriter.DoStop;
 begin
   inherited;
   if Smart then
   begin
     while FOpenedTags.Count > 0 do
-      WriteCloseTag;
+      CloseTag;
   end;
 end;
 
-function TmnXMLWriter.GetIndents: string;
+function TmnCustomXMLWriter.GetIndents: string;
 begin
-  Result := RepeatString(Tabs, FOpenedTags.Count);
+  Result := GetIndents(FOpenedTags.Count);
 end;
 
-procedure TmnXMLWriter.DoStart;
+function TmnCustomXMLWriter.GetIndents(Count: Integer): string;
+begin
+  Result := RepeatString(Tabs, Count);
+end;
+
+procedure TmnCustomXMLWriter.StartTag(NameSpace, Name: string);
+begin
+  if NameSpace <> '' then
+    Name := NameSpace + sNameSpaceSeparator + Name;
+  AttributesCount := 0;
+
+  if Smart and FTaging and (Tabs <> '') then
+    Stream.WriteString(Stream.EndOfLine + RepeatString(Tabs, FOpenedTags.Count));
+
+  DoWriteStartTag(Name);
+
+  FTaging := True;
+  FTagStarted := True;
+  if FSmart then
+    FOpenedTags.Add(Name);
+end;
+
+procedure TmnCustomXMLWriter.DoStart;
 begin
   inherited;
   if Version <> '' then
@@ -134,20 +351,57 @@ begin
   WriteHeader;
 end;
 
-procedure TmnXMLWriter.WriteOpenTag(const Name, Attributes: string);
-var
-  s: string;
+procedure TmnCustomXMLWriter.OpenTag(Name: string; AttNames, AttValues: TStringArray);
 begin
-  if Smart and FTaging and (Tabs <> '') then
-    s := Stream.EndOfLine + RepeatString(Tabs, FOpenedTags.Count);
-  s := s + '<' + Name + Enclose(Attributes, ' ') + '>';
-  Stream.WriteString(S);
-  FTaging := True;
-  if FSmart then
-    FOpenedTags.Add(Name);
+  OpenTag('', Name, AttNames, AttValues);
 end;
 
-procedure TmnXMLWriter.SetSmart(const Value: Boolean);
+procedure TmnCustomXMLWriter.OpenTag(NameSpace, Name: string; AttName, AttValue: string);
+begin
+  OpenTag(NameSpace, Name, [AttName], [AttValue]);
+end;
+
+procedure TmnCustomXMLWriter.OpenTag(Name: string; AttName, AttValue: string);
+begin
+  OpenTag(Name, [AttName], [AttValue]);
+end;
+
+procedure TmnCustomXMLWriter.OpenTag(Name: string);
+begin
+  OpenTag(Name, [], []);
+end;
+
+procedure TmnCustomXMLWriter.CloseTag(NameSpace, Name: string);
+begin
+  if NameSpace <> '' then
+    Name := NameSpace + sNameSpaceSeparator + Name;
+
+  if FSmart then
+  begin
+    if Name = '' then
+    begin
+      Name := FOpenedTags[FOpenedTags.Count - 1];
+      FOpenedTags.Delete(FOpenedTags.Count - 1);
+    end
+    else
+    begin
+      if (FOpenedTags.Count = 0) then
+        raise EmnXMLException.Create('Tag name not opened')
+      else if (FOpenedTags[FOpenedTags.Count - 1] <> Name) then //not the last tag
+        raise EmnXMLException.Create('Tag name "' + Name + '" is not "' + FOpenedTags[FOpenedTags.Count - 1] + '"');
+      FOpenedTags.Delete(FOpenedTags.Count - 1);
+    end;
+  end;
+
+  if Smart and FTaging and (Tabs <> '') then
+    Stream.WriteString(Stream.EndOfLine + GetIndents);
+
+  DoWriteCloseTag(Name);
+
+  FTaging := True;
+end;
+
+procedure TmnCustomXMLWriter.SetSmart(const Value: Boolean);
 begin
   if FSmart <> Value then
   begin
@@ -157,7 +411,7 @@ begin
   end;
 end;
 
-procedure TmnXMLWriter.WriteHeader;
+procedure TmnCustomXMLWriter.WriteHeader;
 var
   i: Integer;
   s: string;
@@ -173,76 +427,183 @@ begin
   Stream.WriteLine(s);
 end;
 
-procedure TmnXMLWriter.WriteEmptyTag(Name: string);
+procedure TmnCustomXMLWriter.AddTag(Name: string);
 begin
-  Stream.WriteString('<' + Name + '/>');
-  FTaging := True;
+  AddTag('', Name, [], []);
 end;
 
-procedure TmnXMLWriter.WriteText(Value: string);
+procedure TmnCustomXMLWriter.AddText(Value: string);
 begin
-  Stream.WriteString(EntityEncode(Value));
-  FTaging := False;
+  if Value <> '' then
+  begin
+    DoWriteText(Value);
+    FTaging := False;
+  end;
 end;
 
-function TmnXMLWriter.CharsetEncode(const Value: string): string;
+procedure TmnCustomXMLWriter.AddText(NameSpace, TagName, Text: string; AttNames: TStringArray; AttValues: TStringArray);
+begin
+  if Text <> '' then
+  begin
+    OpenTag(NameSpace, TagName, AttNames, AttValues);
+    AddText(Text);
+    CloseTag(NameSpace, TagName);
+  end;
+end;
+
+procedure TmnCustomXMLWriter.AddText(TagName, Text: string);
+begin
+  AddText('', TagName, Text, [], []);
+end;
+
+procedure TmnCustomXMLWriter.AddComment(Value: string);
+begin
+  if Smart then
+    Stream.WriteString(' ');
+  DoWriteComment(Value);
+end;
+
+procedure TmnCustomXMLWriter.AddCommentLine(Value: string);
+begin
+  if Smart and (Tabs <> '') then
+  begin
+    Stream.WriteLine;
+    Stream.WriteString(GetIndents);
+  end;
+  DoWriteComment(Value);
+end;
+
+procedure TmnCustomXMLWriter.AddCDATA(Value: string);
+begin
+  if Smart and (Tabs <> '') then
+    Stream.WriteString(GetIndents);
+  DoWriteCDATA(Value);
+end;
+
+function TmnCustomXMLWriter.CharsetEncode(const Value: string): string;
 begin
   Result := Value;
 end;
 
-procedure TmnXMLWriter.WriteComment(Value: string);
+procedure TmnCustomXMLWriter.StartTag(Name: string);
 begin
-  Stream.WriteString('<!--' + EntityEncode(Value) + '-->');
+  StartTag('', Name);
 end;
 
-procedure TmnXMLWriter.Write(const Name, Value, Attributes: string);
-var
-  s: string;
-begin
-  if Smart and (Tabs <> '') then
-    s := Stream.EndOfLine + RepeatString(Tabs, FOpenedTags.Count)
-  else
-    s := '';
-  s := s + '<' + Name + Enclose(Attributes, ' ') + '>' + EntityEncode(Value) + '</' + Name + '>';
-  Stream.WriteString(s)
-end;
-
-procedure TmnXMLWriter.WriteStartTag(const Name: string);
-var
-  s: string;
-begin
-  if Smart and FTaging and (Tabs <> '') then
-    s := Stream.EndOfLine + RepeatString(Tabs, FOpenedTags.Count);
-  s := s + '<' + Name;
-  Stream.WriteString(S);
-  FTaging := True;
-  FTagStarted := True;
-  if FSmart then
-    FOpenedTags.Add(Name);
-end;
-
-procedure TmnXMLWriter.WriteStopTag(Empty: Boolean; const Attributes: string);
-var
-  s: string;
+procedure TmnCustomXMLWriter.AddAttribute(Name, Value: string);
 begin
   if not FTagStarted then
-    raise EmnXMLException.Create('Tag not started');
-  s := Enclose(Attributes, ' ');
-  if Empty then
+    raise EmnXMLException.Create('There is no tag started');
+  if Smart then
   begin
-    if Smart then
-      FOpenedTags.Delete(FOpenedTags.Count - 1); //close last tag must remove it
-    s := s + '/>'
+    if Breaks then
+    begin
+      Stream.WriteLine;
+      Stream.WriteString(GetIndents(FOpenedTags.Count));
+    end
+    else if (AttributesCount > 0) then
+    begin
+      if (Length(Value) > cMaxLine) then
+      begin
+        Stream.WriteLine;
+        Stream.WriteString(GetIndents(FOpenedTags.Count));
+      end
+      else
+        Stream.WriteString(' ');
+    end
+    else
+      Stream.WriteString(' ');
+    DoWriteAttribute(Name, Value);
   end
   else
-    s := s + '>';
-  Stream.WriteString(S);
-  FTagStarted := False;
+  begin
+    Stream.WriteString(' ');
+    DoWriteAttribute(Name, Value);
+  end;
+  Inc(AttributesCount);
 end;
 
-procedure TmnXMLWriter.WriteAttributes(const Attributes: string);
+procedure TmnCustomXMLWriter.AddAttributes(AttNames, AttValues: TStringArray);
+var
+  i: Integer;
 begin
-  Stream.WriteString(Enclose(Attributes, ' '));
+  for i := 0 to Length(AttNames) -1 do
+  begin
+    if i < Length(AttValues) then
+      AddAttribute(AttNames[i], AttValues[i]);
+  end;
+end;
+
+procedure TmnCustomXMLWriter.StopTag(Name: string);
+begin
+  StopTag('', Name);
+end;
+
+procedure TmnCustomXMLWriter.AddXMLNS(NameSpace, Value: string);
+begin
+  NameSpace := 'xmlns' + sNameSpaceSeparator + NameSpace;
+  AddAttribute(NameSpace, Value);
+end;
+
+procedure TmnCustomXMLWriter.StopTag(NameSpace, Name: string; CloseIt: Boolean);
+begin
+  if NameSpace <> '' then
+    Name := NameSpace + sNameSpaceSeparator + Name;
+
+  if not FTagStarted then
+    raise EmnXMLException.Create('Tag not started');
+
+  DoWriteStopTag(Name, CloseIt);
+
+  FTagStarted := False;
+  AttributesCount := 0;
+
+  if CloseIt then
+  begin
+    if FSmart then
+    begin
+      if Name = '' then
+      begin
+        Name := FOpenedTags[FOpenedTags.Count - 1];
+        FOpenedTags.Delete(FOpenedTags.Count - 1);
+      end
+      else
+      begin
+        if (FOpenedTags.Count = 0) then
+          raise EmnXMLException.Create('Tag name not opened')
+        else if (FOpenedTags[FOpenedTags.Count - 1] <> Name) then //not the last tag
+          raise EmnXMLException.Create('Tag name "' + Name + '" is not "' + FOpenedTags[FOpenedTags.Count - 1] + '"');
+        FOpenedTags.Delete(FOpenedTags.Count - 1);
+      end;
+    end;
+
+    FTaging := True; //TODO: not sure
+  end;
+end;
+
+procedure TmnCustomXMLWriter.StopTag;
+begin
+  StopTag('');
+end;
+
+procedure TmnCustomXMLWriter.OpenTag(NameSpace, Name: string; AttNames, AttValues: TStringArray; CloseIt: Boolean);
+var
+  i: Integer;
+begin
+  StartTag(NameSpace, Name);
+  for i := 0 to Length(AttNames) -1 do
+  begin
+    if i < Length(AttValues) then
+      AddAttribute(AttNames[i], AttValues[i])
+    else
+      AddAttribute(AttNames[i], '');
+  end;
+  StopTag(NameSpace, Name, CloseIt);
+end;
+
+procedure TmnCustomXMLWriter.OpenTag(NameSpace, Name: string);
+begin
+  OpenTag(NameSpace, Name, [], []);
 end;
 
 end.

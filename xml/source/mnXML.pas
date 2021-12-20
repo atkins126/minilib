@@ -100,11 +100,15 @@ type
     property Count: Integer read FCount;
   end;
 
+  { TmnXMLAttribute }
+
   TmnXMLAttribute = class(TmnNamedObject)
   private
+    FNameSpace: string;
     FValue: string;
     function GetValue: string;
   public
+    property NameSpace: string read FNameSpace write FNameSpace;
     property Value: string read GetValue write FValue;
   end;
 
@@ -117,6 +121,7 @@ type
   public
     constructor Create(vAttributes: string = ''); virtual;
     procedure SetText(Value: string);
+    procedure Add(vNameSpace, vName, vValue: string); overload;
     procedure Add(vName, vValue: string); overload;
     procedure Add(S: string); overload; //"Name = Value"
     procedure Append(vAttributes: string); overload; // multiple attributes
@@ -200,8 +205,8 @@ begin
   Entities.Add('&amp;', '&'); //must be first //belal add & and ; to name
   Entities.Add('&lt;', '<');
   Entities.Add('&gt;', '>');
-  Entities.Add('&apos;', '''');
   Entities.Add('&quot;', '"');
+//  Entities.Add('&apos;', ''''); //ido
 
 {  Entities.Add('amp', '&'); //must be first
   Entities.Add('lt', '<');
@@ -429,6 +434,8 @@ function TmnXMLEntities.CreateReplaceArr(const Value: string; vWay: TEntityRende
     aSame: Boolean;
   begin
     Result := -1;
+    v := nil;
+    l := MaxInt;
     for I := 0 to Count - 1 do
     begin
       case vWay of
@@ -636,10 +643,16 @@ end;
 { TmnXMLAttributes }
 
 procedure TmnXMLAttributes.Add(vName, vValue: string);
+begin
+  Add('', vName, vValue);
+end;
+
+procedure TmnXMLAttributes.Add(vNameSpace, vName, vValue: string);
 var
   lItem: TmnXMLAttribute;
 begin
   lItem := TmnXMLAttribute.Create;
+  lItem.NameSpace := vNameSpace;
   lItem.Name := vName;
   lItem.Value := vValue;
   Add(lItem);
@@ -718,25 +731,29 @@ var
 begin
   if s <> '' then
   begin
-    p := pos('=', s);
-    if p >= 0 then
+    s := Trim(s);
+    if s <> '' then
     begin
-      Name := Copy(s, 1, p - 1);
-      Value := DequoteStr(Copy(s, p + 1, MaxInt));
-    end
-    else
-    begin
-      Name := S;
-      Value := '';
+      p := pos('=', s);
+      if p >= 0 then
+      begin
+        Name := Copy(s, 1, p - 1);
+        Value := DequoteStr(Copy(s, p + 1, MaxInt));
+      end
+      else
+      begin
+        Name := S;
+        Value := '';
+      end;
+      (TObject(Sender) as TmnXMLAttributes).Add(Name, Value);
     end;
-    (TObject(Sender) as TmnXMLAttributes).Add(Name, Value);
   end;
 end;
 
 procedure TmnXMLAttributes.SetText(Value: string);
 begin
   Clear;
-  StrToStringsCallback(Value, Self, @AttrStrToStringsDeqouteCallbackProc, [' '], [' ', #0, #13, #10]);
+  StrToStringsExCallback(Value, Self, @AttrStrToStringsDeqouteCallbackProc, [' '], [' ', #0, #13, #10]);
 end;
 
 { TmnXMLAttribute }

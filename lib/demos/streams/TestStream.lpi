@@ -28,9 +28,6 @@
       <Item>
         <PackageName Value="MiniSockets"/>
       </Item>
-      <Item>
-        <PackageName Value="MiniCommons"/>
-      </Item>
     </RequiredPackages>
     <Units>
       <Unit>
@@ -63,7 +60,6 @@
     </Target>
     <SearchPaths>
       <IncludeFiles Value="$(ProjOutDir)"/>
-      <OtherUnitFiles Value="..\..\..\crypt;..\..;..\..\..\socket\source"/>
       <UnitOutputDirectory Value="lib\$(TargetCPU)-$(TargetOS)"/>
     </SearchPaths>
     <Linking>

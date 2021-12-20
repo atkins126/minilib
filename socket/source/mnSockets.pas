@@ -32,8 +32,8 @@ const
 type
   EmnException = class(Exception);
   EmnSocketException = class(Exception);
-  TmnShutdown = (sdReceive, sdSend);
-  TmnShutdowns = set of TmnShutdown;
+  TmnSocketState = (sdReceive, sdSend, sdClose);
+  TmnSocketStates = set of TmnSocketState;
   TmnError = (erSuccess, erTimeout, erClosed, erInvalid);
 
   TSocketHandle = Integer;
@@ -72,7 +72,7 @@ type
   TmnCustomSocket = class abstract(TObject)
   private
     FOptions: TmnsoOptions;
-    FShutdownState: TmnShutdowns;
+    FState: TmnSocketStates;
     FKind: TSocketKind;
     function GetConnected: Boolean;
   protected
@@ -85,13 +85,13 @@ type
     function GetActive: Boolean; virtual; abstract;
     procedure CheckActive; //this will force exception, cuz you should not use socket in api implmentation without active socket, i meant use it in api section only
     function DoSelect(Timeout: Integer; Check: TSelectCheck): TmnError; virtual; abstract;
-    function DoShutdown(How: TmnShutdowns): TmnError; virtual; abstract;
+    function DoShutdown(How: TmnSocketStates): TmnError; virtual; abstract;
     function DoListen: TmnError; virtual; abstract;
     function DoSend(const Buffer; var Count: Longint): TmnError; virtual; abstract;
     function DoReceive(var Buffer; var Count: Longint): TmnError; virtual; abstract;
     function DoPending: Boolean; virtual; abstract;
     function DoClose: TmnError; virtual; abstract;
-    property ShutdownState: TmnShutdowns read FShutdownState;
+    property ShutdownState: TmnSocketStates read FState;
     property Options: TmnsoOptions read FOptions;
     property Kind: TSocketKind read FKind;
   public
@@ -100,7 +100,7 @@ type
     constructor Create(AHandle: Integer; AOptions: TmnsoOptions; AKind: TSocketKind);
     destructor Destroy; override;
     procedure Prepare; virtual; //TODO rename Connect;
-    function Shutdown(How: TmnShutdowns): TmnError;
+    function Shutdown(How: TmnSocketStates): TmnError;
     function Close: TmnError;
     function Receive(var Buffer; var Count: Longint): TmnError;
     function Send(const Buffer; var Count: Longint): TmnError;
@@ -271,7 +271,7 @@ end;
 
 function TmnCustomSocket.GetConnected: Boolean;
 begin
-  Result := Active and ([sdReceive, sdSend] <> FShutdownState)
+  Result := Active and not (sdClose in FState) and not ([sdReceive, sdSend] = FState);
 end;
 
 function TmnCustomSocket.Listen: TmnError;
@@ -294,27 +294,35 @@ var
   ReadSize: Integer;
   ret: Boolean;
 begin
-  CheckActive;
-  if soSSL in Options then
+  //CheckActive; //no i do not want exeption in loop of buffer
+  if not Active then
   begin
-    ret := SSL.Read(Buffer, Count, ReadSize);
-    if ret then
-    begin
-      Count := ReadSize;
-      Result := erSuccess;
-    end
-    else
-    begin
-      Count := 0;
-      Result := erInvalid
-    end;
+    Result := erClosed;
+    Count := 0;
   end
   else
-    Result := DoReceive(Buffer, Count);
-  if Result > erTimeout then
-    Close
-  else if (Result = erTimeout) and (Count = 0) then
-    Count := -1;
+  begin
+    if SSL.Active then
+    begin
+      ret := SSL.Read(Buffer, Count, ReadSize);
+      if ret then
+      begin
+        Count := ReadSize;
+        Result := erSuccess;
+      end
+      else
+      begin
+        Count := 0;
+        Result := erInvalid
+      end;
+    end
+    else
+      Result := DoReceive(Buffer, Count);
+    if Result > erTimeout then
+      Close
+    else if (Result = erTimeout) and (Count = 0) then
+      Count := -1;
+  end;
 end;
 
 function TmnCustomSocket.Select(Timeout: Integer; Check: TSelectCheck): TmnError;
@@ -326,7 +334,7 @@ end;
 
 function TmnCustomSocket.Pending: Boolean;
 begin
-  if soSSL in Options then
+  if SSL.Active then
     Result := SSL.Pending
   else
     Result := DoPending;
@@ -337,40 +345,49 @@ var
   WriteSize: Integer;
   ret: Boolean;
 begin
-  CheckActive;
-  if soSSL in Options then
+  //CheckActive; //no i do not want exeption in loop of buffer
+  if not Active then
   begin
-    ret := SSL.Write(Buffer, Count, WriteSize);
-    if ret then
-    begin
-      Count := WriteSize;
-      Result := erSuccess;
-      if WriteSize <> Count then
-        raise EmnSocketException.Create('Ops WriteSize <> Count we should care about real size')
-    end
-    else
-    begin
-      Count := 0;
-      Result := erInvalid;
-    end;
+    Result := erClosed;
+    Count := 0;
   end
   else
-    Result := DoSend(Buffer, Count);
-  if Result > erTimeout then
-    Close
-  else if (Result = erTimeout) and (Count = 0) then
-    Count := -1;
+  begin
+    if SSL.Active then
+    begin
+      ret := SSL.Write(Buffer, Count, WriteSize);
+      if ret then
+      begin
+        Count := WriteSize;
+        Result := erSuccess;
+        if WriteSize <> Count then
+          raise EmnSocketException.Create('Ops WriteSize <> Count we should care about real size')
+      end
+      else
+      begin
+        Count := 0;
+        Result := erInvalid;
+      end;
+    end
+    else
+      Result := DoSend(Buffer, Count);
+    if Result > erTimeout then
+      Close
+    else if (Result = erTimeout) and (Count = 0) then
+      Count := -1; //Timeout result -1
+  end;
 end;
 
-function TmnCustomSocket.Shutdown(How: TmnShutdowns): TmnError;
+function TmnCustomSocket.Shutdown(How: TmnSocketStates): TmnError;
 begin
   if How <> [] then
   begin
+    {if SSL.Active then
+      SSL.ShutDown;} //nop
     Result := DoShutdown(How);
     if Result = erSuccess then
-      FShutdownState := FShutdownState + How
-    else
-      if Result > erTimeout then
+      FState := FState + How
+    else if Result > erTimeout then
         Close;
   end
   else
@@ -379,14 +396,19 @@ end;
 
 function TmnCustomSocket.Close: TmnError;
 begin
-  if Active then
+  if Connected then
   begin
     if soSSL in Options then
-      SSL.Free;
+    begin
+      SSL.ShutDown;
+      SSL.Free; //before close socket
+    end;
     Result := DoClose;
+    FState := FState + [sdClose];
   end
   else
     Result := erSuccess;
+    //or raise exception?
 end;
 
 { TmnStream }
@@ -413,7 +435,7 @@ begin
   begin
     if Socket.Send(Buffer, Count) >= erTimeout then //yes in send we take timeout as error, we cant try again
     begin
-      FreeSocket;
+      Disconnect;
       Result := 0;
     end
     else
@@ -421,7 +443,7 @@ begin
   end
   else
   begin
-    FreeSocket;
+    Disconnect;
     Result := 0;
   end
 end;
@@ -468,7 +490,7 @@ begin
     if (werr = cerTimeout) then
     begin
       if soCloseTimeout in Options then
-        FreeSocket;
+        Disconnect;
       Result := 0;
     end
     else if (werr = cerSuccess) then
@@ -476,7 +498,7 @@ begin
       err := Socket.Receive(Buffer, Count);
       if ((err = erTimeout) and (soCloseTimeout in Options)) or (err >= erClosed) then
       begin
-        FreeSocket;
+        Disconnect;
         Result := 0;
       end
       else
@@ -484,7 +506,7 @@ begin
     end
     else
     begin
-      FreeSocket;
+      Disconnect;
       Result := 0;
     end;
   end;
@@ -506,7 +528,10 @@ end;
 procedure TmnSocketStream.Disconnect;
 begin
   if (Socket <> nil) and Socket.Connected then
+  begin
     Close; //may be not but in slow matchine disconnect to take as effects as need (POS in 98)
+    //Socket.Close; //without it lag when blocking reading
+  end;
 //  FreeSocket; //Do not free it maybe it is closing from other thread while socket is reading
 end;
 
@@ -530,7 +555,7 @@ begin
   if FSocket = nil then
   begin
     if not HandleError(aErr) then
-      raise EmnSocketException.CreateFmt('Connect failed [%d]', [aErr]);
+      raise EmnSocketException.CreateFmt('Connect failed [#%d]', [aErr]);
   end
   else
     FSocket.Prepare;

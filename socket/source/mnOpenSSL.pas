@@ -82,10 +82,12 @@ type
     CTX: TContext;
     Connected: Boolean;
     FSocket: Integer;
+    Active: Boolean;
   //public
     constructor Init(ACTX: TContext); overload;
     constructor Init(ASSL: PSSL); overload;
     procedure Free;
+    procedure ShutDown;
     procedure SetSocket(ASocket: Integer);
     function Connect: Boolean;
     function Handshake: Boolean;
@@ -238,20 +240,32 @@ begin
   {$ifdef DEBUG}
   Log.WriteLn(SSL_get_version(Handle));
   {$endif}
+  Active := True;
 end;
 
 constructor TSSL.Init(ASSL: PSSL);
 begin
   //inherited Create;
   Handle := ASSL;
+  Active := True;
 end;
 
 procedure TSSL.Free;
 begin
-  //if Handle<>nil then
+  if Handle <> nil then
   begin
     SSL_free(Handle);
     Handle := nil;
+    Active := False;
+  end;
+end;
+
+procedure TSSL.ShutDown;
+begin
+  if Active and (Handle <> nil) then
+  begin
+    SSL_shutdown(Handle);
+    Active := False;
   end;
 end;
 
@@ -301,6 +315,9 @@ function TSSL.Read(var Buf; Size: Integer; out ReadSize: Integer): Boolean;
 var
   err: Integer;
 begin
+  if not Active then
+    raise EmnOpenSSLException.Create('SSL object is not Active');
+
   ReadSize := SSL_read(Handle, Buf, Size);
   if ReadSize <= 0  then
   begin
@@ -325,6 +342,8 @@ function TSSL.Write(const Buf; Size: Integer; out WriteSize: Integer): Boolean;
 var
   err: Integer;
 begin
+  if not Active then
+    raise EmnOpenSSLException.Create('SSL object is not Active');
   WriteSize := SSL_write(Handle, Buf, Size);
   if WriteSize <= 0  then
   begin

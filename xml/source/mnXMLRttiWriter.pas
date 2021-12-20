@@ -69,18 +69,18 @@ begin
     Start;
   if Instance is TComponent then
     FRoot := Instance as TComponent;
-  WriteOpenTag('rtti', 'version="' + cRttiVersion + '" author="' + cRttiAuthor + '"');
+  OpenTag('rtti', ['version', 'author'], [cRttiVersion, cRttiAuthor]);
   WriteProperties('', Instance, True);
-  WriteCloseTag('rtti');
+  CloseTag('rtti');
   FRoot := nil;
 end;
 
 procedure TmnXMLRttiWriter.WriteValue(Value:string; ValueType: string = '');
 begin
   if ValueType <> '' then
-    WriteAttributes('ValueType="' +  ValueType + '"');
-  WriteStopTag;
-  WriteText(Value);
+    AddAttribute('ValueType', ValueType);
+  StopTag;
+  AddText(Value);
 end;
 
 procedure TmnXMLRttiWriter.WriteVariant(Value: Variant);
@@ -184,9 +184,9 @@ begin
     if WithInitTag then
     begin
       if (Instance is TComponent) and ((Instance as TComponent).Name <> '') then
-        WriteOpenTag('Object', 'Type="' + Instance.ClassName + '" Name="' + (Instance as TComponent).Name + '"')
+        OpenTag('Object', ['Type', 'Name'], [Instance.ClassName, (Instance as TComponent).Name])
       else
-        WriteOpenTag('Object', 'Type="' + Instance.ClassName + '"');
+        OpenTag('Object', ['Type'], [Instance.ClassName]);
     end;
     for i := 0 to Count - 1 do
       WriteProperty(Instance, PPropInfo(List[i]));
@@ -200,7 +200,7 @@ begin
 
    if not IsEmpty then
     if WithInitTag then
-      WriteCloseTag('Object');
+      CloseTag('Object');
 end;
 
 procedure TmnXMLRttiWriter.WriteProperty(Instance: TObject; PropInfo: PPropInfo);
@@ -282,8 +282,13 @@ var
   var
     Value: WideString;
   begin
+    {$ifdef FPC}
+    Value := GetWideStrProp(Instance, PropInfo);
+    WriteValue(UTF8String(Value));
+    {$else}
     Value := GetWideStrProp(Instance, PropInfo);
     WriteValue(Value);
+    {$endif}
   end;
 
   procedure WriteStringProp;
@@ -317,10 +322,10 @@ var
     else
     begin
       if (Value is TComponent) and ((Value as TComponent).Name <> '') then
-        WriteAttributes('ID="' + (Value as TComponent).Name + '"');
+        AddAttribute('ID', (Value as TComponent).Name);
       if (Value is TPersistent) and (IsStoredProp(Instance, PropInfo)) then //just more info
-        WriteAttributes('Class="' + (Value as TPersistent).ClassName + '"');
-      WriteStopTag;
+        AddAttribute('Class', (Value as TPersistent).ClassName);
+      StopTag;
       WriteProperties(PropInfo^.Name, Value, False);
     end;
   end;
@@ -330,7 +335,7 @@ var
     Value: Pointer;
   begin
     Value := Pointer(GetInterfaceProp(Instance, PropInfo));
-    WriteStopTag;
+    StopTag;
     RttiFilers.WriteInterface(PropInfo^.Name, Self, Value);
   end;
 
@@ -340,9 +345,9 @@ begin
     PropType := GetPropTypeInfo(PropInfo);
     if not (PropType^.Kind in [tkUnknown, tkMethod, tkRecord, tkArray, {$IFDEF FPC}tkObject, tkWChar, tkQWord, tkInterfaceRaw, {$ENDIF}tkDynArray]) then
     begin
-      WriteStartTag(PropInfo^.Name);
+      StartTag(PropInfo^.Name);
       if FWriteTypes then
-        WriteAttributes('Type="' + PropType.Name + '"');
+        AddAttribute('Type', PropType.Name);
       case PropType^.Kind of
         tkInteger:
           WriteIntegerProp;
@@ -372,10 +377,12 @@ begin
         tkBool:
           WriteBoolProp;
         {$ENDIF}
+        else
+          ;
       end;
       if TagStarted then
-        WriteStopTag;
-      WriteCloseTag(PropInfo^.Name);
+        StopTag;
+      CloseTag(PropInfo^.Name);
     end;
   end;
 end;
