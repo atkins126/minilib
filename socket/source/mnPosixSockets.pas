@@ -21,6 +21,7 @@ interface
 uses
   Classes, SysUtils,
   Posix.Base, Posix.SysSelect, Posix.SysSocket, Posix.Unistd, Posix.ArpaInet, Posix.NetDB, Posix.SysTime, Posix.NetinetIn, Posix.Fcntl, Posix.Errno,
+  Posix.Signal,
   {$ifdef LINUX} Linuxapi.KernelIoctl, Linuxapi.KernelDefs, {$else}  {$endif}
   Posix.StrOpts, //
   mnSockets;
@@ -238,7 +239,7 @@ begin
     exit;
   end;
 
-  CheckActive;
+  //CheckActive;
 
   c := Posix.SysSocket.shutdown(FHandle, iHow);
 
