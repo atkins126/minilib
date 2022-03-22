@@ -96,23 +96,19 @@ type
 
   TmodWebModule = class(TmodModule)
   private
-    FServer: TmodWebServer;
+    //FServer: TmodWebServer;
     procedure SetDefaultDocument(AValue: TStringList);
     procedure SetDocumentRoot(AValue: string);
   protected
     FDocumentRoot: string;
     FDefaultDocument: TStringList;
-    function GetActive: Boolean; override;
     procedure Created; override;
     procedure DoCreateCommands; override;
 
     function RequestCommand(var ARequest: TmodRequest; ARequestStream: TmnBufferStream; ARespondStream: TmnBufferStream): TmodCommand; override;
-
-    function Match(const ARequest: TmodRequest): Boolean; override;
     procedure Log(S: string); override;
   public
     destructor Destroy; override;
-    property Server: TmodWebServer read FServer;
     property DocumentRoot: string read FDocumentRoot write SetDocumentRoot;
     property DefaultDocument: TStringList read FDefaultDocument write SetDefaultDocument;
   end;
@@ -134,12 +130,9 @@ type
   end;
 
   TmodWebServer = class(TmodCustomWebServer)
-  private
-    FWebModule: TmodWebModule;
   protected
   public
     constructor Create; override;
-    property WebModule: TmodWebModule read FWebModule;
   end;
 
   {**
@@ -263,17 +256,18 @@ begin
   FDefaultDocument.Assign(AValue);
 end;
 
-function TmodWebModule.GetActive: Boolean;
-begin
-  Result := Server.Active;
-end;
-
 procedure TmodWebModule.Created;
 begin
   inherited;
   FDefaultDocument := TStringList.Create;
   UseKeepAlive := False;
   Compressing := True;
+
+  FDocumentRoot := '';
+  FDefaultDocument.Add('index.html');
+  FDefaultDocument.Add('index.htm');
+  FDefaultDocument.Add('default.html');
+  FDefaultDocument.Add('default.htm');
 end;
 
 procedure TmodWebModule.DoCreateCommands;
@@ -303,16 +297,10 @@ begin
   Result := CreateCommand(ARequest.Command, ARequest, ARequestStream, ARespondStream);
 end;
 
-function TmodWebModule.Match(const ARequest: TmodRequest): Boolean;
-begin
-  //ParseRequest(ARequest);
-  Result := SameText(Name, ARequest.Module) and SameText(SubStr(ARequest.Protcol, '/', 0),  'http');
-end;
-
 procedure TmodWebModule.Log(S: string);
 begin
   inherited;
-  Server.Listener.Log(S);
+  Modules.Log(S);
 end;
 
 { TmodURICommand }
@@ -409,39 +397,50 @@ var
   aDocument: string;
 begin
   aDocument := IncludeTrailingPathDelimiter(Root);
-  if Request.Path <> '' then
-    aDocument := aDocument + '.' + Request.Path;
-  aDocument := StringReplace(aDocument, '/', PathDelim, [rfReplaceAll]);//correct it for linux
-  if aDocument[Length(aDocument)] = PathDelim then //get the default file if it not defined
-     aDocument := GetDefaultDocument(aDocument);
-  aDocument := ExpandFileName(aDocument);
-
-  if FileExists(aDocument) then
+  if (Request.Path = '')and(Request.URI[Length(Request.URI)] <> PathDelim) then
   begin
-    if Active then
-    begin
-      aDocStream := TFileStream.Create(aDocument, fmOpenRead or fmShareDenyWrite);
-      try
-        DocSize := aDocStream.Size;
-        if Active then
-        begin
-          SendRespond('HTTP/1.1 200 OK');
-          PostHeader('Content-Type', DocumentToContentType(aDocument));
-          if KeepAlive then
-            PostHeader('Content-Length', IntToStr(DocSize));
-        end;
-
-        SendHeader;
-
-        if Active then
-          RespondStream.WriteStream(aDocStream);
-      finally
-        aDocStream.Free;
-      end;
-    end;
+    //https://developer.mozilla.org/en-US/docs/Web/HTTP/Redirections
+    SendRespond('HTTP/1.1 300 Multiple Choice');
+    PostHeader('Location', Request.URI+'/');
+    SendHeader;
   end
   else
-    RespondNotFound;
+  begin
+
+    if Request.Path <> '' then
+      aDocument := aDocument + '.' + Request.Path;
+    aDocument := StringReplace(aDocument, '/', PathDelim, [rfReplaceAll]);//correct it for linux
+    if aDocument[Length(aDocument)] = PathDelim then //get the default file if it not defined
+       aDocument := GetDefaultDocument(aDocument);
+    aDocument := ExpandFileName(aDocument);
+
+    if FileExists(aDocument) then
+    begin
+      if Active then
+      begin
+        aDocStream := TFileStream.Create(aDocument, fmOpenRead or fmShareDenyWrite);
+        try
+          DocSize := aDocStream.Size;
+          if Active then
+          begin
+            SendRespond('HTTP/1.1 200 OK');
+            PostHeader('Content-Type', DocumentToContentType(aDocument));
+            if KeepAlive then
+              PostHeader('Content-Length', IntToStr(DocSize));
+          end;
+
+          SendHeader;
+
+          if Active then
+            RespondStream.WriteStream(aDocStream);
+        finally
+          aDocStream.Free;
+        end;
+      end;
+    end
+    else
+      RespondNotFound;
+  end;
   inherited;
 end;
 
@@ -451,7 +450,7 @@ procedure TmodServerInfoCommand.RespondResult(var Result: TmodExecuteResults);
 begin
   inherited;
   SendRespond('OK');
-  RespondStream.WriteLine('Server is running on port: ' + Module.Server.Port);
+  //RespondStream.WriteLine('Server is running on port: ' + Module.Server.Port);
   RespondStream.WriteLine('the server is: "' + ParamStr(0) + '"');
 end;
 
@@ -525,23 +524,13 @@ end;
 constructor TmodWebServer.Create;
 begin
   inherited;
-  FWebModule := TmodWebModule.Create('web', 'http/1.1', Modules);
-  FWebModule.FServer := Self;
-  Modules.DefaultModule := FWebModule;
+  Modules.DefaultModule := TmodWebModule.Create('web', 'doc', ['http/1.1'], Modules);
   Port := '80';
-  with FWebModule do
-  begin
-    FDocumentRoot := '';
-    FDefaultDocument.Add('index.html');
-    FDefaultDocument.Add('index.htm');
-    FDefaultDocument.Add('default.html');
-    FDefaultDocument.Add('default.htm');
-  end;
 end;
 
 function TmodCustomWebServer.CreateModules: TmodModules;
 begin
-  Result := TmodWebModules.Create;
+  Result := TmodWebModules.Create(Self);
 end;
 
 { TmodHttpCommand }
