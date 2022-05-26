@@ -47,9 +47,9 @@ type
     function GetConnected: Boolean; virtual; //Socket or COM ports have Connected override
   public
     //Count = 0 , load until eof
-    function ReadString(Count: TFileSize = 0): RawByteString; overload;
-    function ReadString(Count: TFileSize; CodePage: Word): RawByteString; overload;
-    function ReadBufferBytes(Count: TFileSize = 0): TBytes; overload;
+    function ReadString(out S: string; Count: TFileSize = 0): Boolean; overload;
+    function ReadBytes(Count: TFileSize = 0): TBytes; overload;
+    function ReadBufferBytes(Count: TFileSize = 0): TBytes; overload; deprecated 'use ReadBytes';
     function WriteString(const Value: String): TFileSize; overload;
     //Use copy from to stream
     function ReadStream(AStream: TStream; Count: TFileSize = 0): TFileSize; overload;
@@ -145,6 +145,7 @@ type
   protected
     function CheckReadBuffer: Boolean; //check it in belal job
   private
+    FTimeoutTries: integer;
     type
       { TmnInitialStreamProxy }
 
@@ -200,11 +201,11 @@ type
 
     function ReadLine: string; overload;
     function ReadLine(out S: utf8string; ExcludeEOL: Boolean = True): Boolean; overload;
-    function ReadLineUTF8(out S: utf8string; ExcludeEOL: Boolean = True): Boolean;
+    function ReadLineUTF8(out S: utf8string; ExcludeEOL: Boolean = True): Boolean; overload;
+    function ReadLineUTF8: UTF8String; overload;
     function ReadLine(out S: unicodestring; ExcludeEOL: Boolean = True): Boolean; overload;
 
     function ReadLineRawByte(out S: rawbytestring; ExcludeEOL: Boolean = True): Boolean; overload;
-    function ReadLineRawByte: RawByteString; overload;
 
     {$ifndef NEXTGEN}
     function ReadLine(out S: ansistring; ExcludeEOL: Boolean = True): Boolean; overload;
@@ -218,8 +219,8 @@ type
     function WriteLine(const S: utf8string): TFileSize; overload;
     function WriteLine(const S: unicodestring): TFileSize; overload;
 
-    function WriteRawByte(const S: rawbytestring): TFileSize; overload;
-    function WriteLineRawByte(const S: rawbytestring): TFileSize; overload;
+    function WriteRawByte(const S: UTF8String): TFileSize; overload;
+    function WriteUTF8(const S: UTF8String): TFileSize; overload;
     function WriteLineUTF8(const S: UTF8String): TFileSize; overload;
 
     {$ifndef NEXTGEN}
@@ -245,6 +246,7 @@ type
     property EndOfStream: Boolean read GetEndOfStream;
 
     property EndOfLine: string read FEndOfLine write FEndOfLine;
+    property TimeoutTries: integer read FTimeoutTries write FTimeoutTries;
     property BufferSize: TFileSize read FReadBuffer.Size write SetReadBufferSize; //deprecated;
     property ReadBufferSize: TFileSize read FReadBuffer.Size write SetReadBufferSize;
     property WriteBufferSize: TFileSize read FWriteBuffer.Size write SetWriteBufferSize; //TODO not yet
@@ -650,13 +652,13 @@ begin
   Result := True;
 end;
 
-function TmnCustomStream.ReadString(Count: TFileSize): RawByteString;
+function TmnCustomStream.ReadString(out S: string; Count: TFileSize): Boolean;
 var
   aBuffer: PByte;
   p: Integer;
   l, c, Size: Integer;
 begin
-  Result := '';
+  S := '';
   Size := Count;
   {$ifdef FPC} //less hint in fpc
   aBuffer := nil;
@@ -675,7 +677,7 @@ begin
       begin
         if Count > 0 then
           Size := Size - c;
-        SetLength(Result, p + c);
+        SetLength(S, p + c);
         Move(aBuffer^, (PByte(Result) + p)^, c);
         p := p + c;
       end;
@@ -685,12 +687,7 @@ begin
   finally
     FreeMem(aBuffer);
   end;
-end;
-
-function TmnCustomStream.ReadString(Count: TFileSize; CodePage: Word): RawByteString;
-begin
-  Result := ReadString(Count);
-  SetCodePage(Result, CodePage, False);
+  Result := S <> '';
 end;
 
 function TmnCustomStream.CopyToStream(AStream: TStream; Count: TFileSize): TFileSize;
@@ -714,7 +711,7 @@ begin
   Result := WriteStream(AStream, Count, RealCount);
 end;
 
-function TmnCustomStream.ReadBufferBytes(Count: TFileSize): TBytes;
+function TmnCustomStream.ReadBytes(Count: TFileSize): TBytes;
 var
   aBuffer: PByte;
   p: Integer;
@@ -749,6 +746,11 @@ begin
   finally
     FreeMem(aBuffer);
   end;
+end;
+
+function TmnCustomStream.ReadBufferBytes(Count: TFileSize): TBytes;
+begin
+  Result := ReadBytes(Count);
 end;
 
 function TmnCustomStream.ReadStream(AStream: TStream; Count: TFileSize; out RealCount: Integer): TFileSize;
@@ -870,31 +872,12 @@ end;
 
 {$endif}
 
-function TmnBufferStream.WriteLineRawByte(const S: rawbytestring): TFileSize;
-var
-  EOL: RawByteString;
-begin
-  Result := 0;
-  if s <> '' then
-    Result := Write(Pointer(S)^, Length(S));
-  if EndOfLine <> '' then
-  begin
-    EOL := RawByteString(EndOfLine);
-    Result := Result + Write(Pointer(EOL)^, Length(EOL));
-  end;
-end;
-
 function TmnBufferStream.WriteLineUTF8(const S: UTF8String): TFileSize;
-var
-  EOL: UTF8String;
 begin
-  Result := 0;
-  if s <> '' then
-    Result := Write(Pointer(S)^, Length(S));
+  Result := WriteUTF8(s);
   if EndOfLine <> '' then
   begin
-    EOL := EndOfLine;
-    Result := Result + Write(Pointer(EOL)^, Length(EOL));
+    Result := Result + WriteUTF8(EndOfLine);
   end;
 end;
 
@@ -920,7 +903,7 @@ begin
   end;
 end;
 
-function TmnBufferStream.WriteRawByte(const S: rawbytestring): TFileSize;
+function TmnBufferStream.WriteRawByte(const S: UTF8String): TFileSize;
 begin
   if S <> '' then
     Result := Write(Pointer(S)^, Length(S))
@@ -957,6 +940,13 @@ begin
     if Value[i] <> '' then //stupid delphi always add empty line in last of TStringList
       Result := Result + WriteLine(Value[i]);
   end;
+end;
+
+function TmnBufferStream.WriteUTF8(const S: UTF8String): TFileSize;
+begin
+  Result := 0;
+  if s <> '' then
+    Result := Write(Pointer(S)^, Length(S));
 end;
 
 procedure TmnBufferStream.ReadCommand(out Command: string; out Params: string);
@@ -1075,9 +1065,9 @@ begin
   ReadLine(Result);
 end;}
 
-function TmnBufferStream.ReadLineRawByte: RawByteString;
+function TmnBufferStream.ReadLineUTF8: UTF8String;
 begin
-  ReadLineRawByte(Result, True);
+  ReadLineUTF8(Result, True);
 end;
 
 function TmnBufferStream.ReadLineUTF8(out S: utf8string; ExcludeEOL: Boolean): Boolean;
@@ -1276,7 +1266,7 @@ end;
 
 function TmnBufferStream.Read(var Buffer; Count: Longint): Longint;
 var
-  c, aCount, aSize: Longint;
+  c, aCount, aSize, aTry: Longint;
   P: PByte;
 begin
   Flush;//Flush write buffer
@@ -1288,6 +1278,7 @@ begin
       FReadBuffer.CreateBuffer;
     P := @Buffer;
     aCount := 0;
+    aTry := 0;
     while (Count > 0) and not (cloRead in Done) do
     begin
       c := FReadBuffer.Stop - FReadBuffer.Pos; //size of data in buffer
@@ -1296,8 +1287,14 @@ begin
         aSize := LoadReadBuffer;
         if (aSize = 0) or not Connected then
           break
+        else if aSize<0 then
+        begin
+          Inc(aTry);
+          if aTry>=TimeoutTries then
+            Break
+        end
         else
-          Continue//new
+          Continue;
       end;
       if c > Count then // is FReadBuffer enough for Count
         c := Count;

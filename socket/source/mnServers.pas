@@ -22,6 +22,10 @@ uses
   mnOpenSSL,
   mnSockets, mnStreams, mnConnections;
 
+const
+  cListenerTimeout = 3000;
+  cIdleInterval = 1 * 60 * 1000;
+
 type
 
   { TmnServerSocket }
@@ -138,7 +142,7 @@ type
     //if listener connection down by network it will reconnect again
     property Attempts: Integer read FAttempts write FAttempts;
     //it is ListenerTimeout not ReadTimeOut
-    property Timeout: Integer read FTimeout write FTimeout default -1;
+    property Timeout: Integer read FTimeout write FTimeout default cListenerTimeout;
   end;
 
   {**
@@ -155,6 +159,8 @@ type
     FListener: TmnListener;
     FLogging: Boolean;
     FUseSSL: Boolean;
+    FIdleTick: Int64;
+    FIdleInterval: Integer;
     procedure SetActive(const Value: Boolean);
     procedure SetAddress(const Value: string);
     procedure SetPort(const Value: string);
@@ -167,6 +173,7 @@ type
     procedure DoLog(const S: string); virtual;
     procedure DoChanged(vListener: TmnListener); virtual;
     procedure DoAccepted(vListener: TmnListener; vConnection: TmnServerConnection); virtual;
+    procedure DoIdle; virtual; //no connection found after time out:)
     procedure DoBeforeOpen; virtual;
     procedure DoAfterOpen; virtual;
     procedure DoBeforeClose; virtual;
@@ -174,6 +181,8 @@ type
     procedure DoStart; virtual;
     procedure DoStop; virtual;
     procedure DoCheckSynchronize;
+    //Idle is in Listener thread not in main thread
+    procedure Idle(vListener: TmnListener);
   public
     PrivateKeyFile: string;
     CertificateFile: string;
@@ -197,7 +206,7 @@ type
     property Active: boolean read FActive write SetActive default False;
     property Logging: Boolean read FLogging write FLogging default false;
     property Connected: Boolean read GetConnected;
-
+    property IdleInterval: Integer read FIdleInterval write FIdleInterval default cIdleInterval;
   end;
 
 //TODO move to another unit SimpleClientServer
@@ -461,6 +470,15 @@ begin
     Result := 0;
 end;
 
+procedure TmnServer.Idle(vListener: TmnListener);
+begin
+  if (TThread.GetTickCount64-FIdleTick)>IdleInterval then
+  begin
+    FIdleTick := TThread.GetTickCount64;
+    vListener.Queue(DoIdle);
+  end;
+end;
+
 procedure TmnServer.DoAfterOpen;
 begin
 end;
@@ -502,7 +520,7 @@ begin
   FreeOnTerminate := False;
   FLogMessages := TStringList.Create;
   FAttempts := 0;
-  FTimeout := -1;
+  FTimeout := cListenerTimeout;
 end;
 
 function TmnListener.DoCreateConnection(vStream: TmnConnectionStream): TmnConnection;
@@ -598,7 +616,9 @@ begin
           end;
         end
         else
+        begin
           aSocket := nil;
+        end;
 
         {Enter; //todo remove it;
         try
@@ -611,8 +631,11 @@ begin
 
         if not Terminated then
         begin
+          if Connected and (Server <> nil) then
+            Server.Idle(Self);
           if (aSocket = nil) then
           begin
+
             //only if we need retry mode, attempt to connect new socket, for 3 times as example, that if socket disconnected for wiered reason
             if (not Connected) and (FAttempts > 0) and (FTries > 0) then
             begin
@@ -775,6 +798,8 @@ begin
   //FAddress := '';
   PrivateKeyFile := 'privatekey.pem';
   CertificateFile := 'certificate.pem';
+  IdleInterval := cIdleInterval;
+  FIdleTick := TThread.GetTickCount64;
 end;
 
 procedure TmnServer.BeforeDestruction;
@@ -853,11 +878,16 @@ begin
   end;
   Log('Server stopped');
   DoStop;
+  TThread.Synchronize(nil, DoCheckSynchronize);
 end;
 
 function TmnServer.DoCreateListener: TmnListener;
 begin
   Result := TmnListener.Create;
+end;
+
+procedure TmnServer.DoIdle;
+begin
 end;
 
 function TmnServer.CreateListener: TmnListener;

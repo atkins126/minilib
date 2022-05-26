@@ -22,7 +22,7 @@ unit mnUtils;
 interface
 
 uses
-  {$ifdef windows}Windows, {$endif}
+  {$ifdef windows}Windows,{$endif}
   Classes, SysUtils, StrUtils, DateUtils, Types, Character;
 
 const
@@ -68,7 +68,7 @@ function StrToStringsEx(Content: string; Strings: TStrings; Separators: Array of
 //function StrToStringsEx(Content: string; Strings: TStrings; IgnoreInitialWhiteSpace: TSysCharSet = [' ']; Quotes: TSysCharSet = ['''', '"']): Integer; overload;
 
 procedure StrToStringsCallbackProc(Sender: Pointer; Index: Integer; S: string; var Resume: Boolean);
-procedure StrToStringsDeqouteCallbackProc(Sender: Pointer; Index:Integer; S: string; var Resume: Boolean);
+procedure StrToStringsDequoteCallbackProc(Sender: Pointer; Index:Integer; S: string; var Resume: Boolean);
 
 {
   examples:
@@ -82,15 +82,35 @@ type
     pargSmartSwitch
   );
 
+//*  -t --test cmd1 cmd2 -t: value -t:value -t value
 function ParseArgumentsCallback(Content: string; const CallBackProc: TArgumentsCallbackProc; Sender: Pointer; Switches: TArray<Char>; WhiteSpaces: TArray<Char> {= [' ', #9]}; Quotes: TArray<Char> {= ['''', '"']};  ValueSeperators: TArray<Char> {= [':', '=']}; Options: TParseArgumentsOptions = [pargSmartSwitch]): Integer; overload;
 function ParseArgumentsCallback(Content: string; const CallBackProc: TArgumentsCallbackProc; Sender: Pointer): Integer; overload;
+
+//*
 function ParseArguments(Content: string; Strings: TStrings; Switches: TArray<Char>; WhiteSpaces: TArray<Char>{ = [' ', #9]}; Quotes: TArray<Char> {= ['''', '"']}; ValueSeperators: TArray<Char> {= [':', '=']}): Integer; overload;
 function ParseArguments(Content: string; Strings: TStrings): Integer; overload;
 
-function GetArgument(Strings: TStrings; out Value: String; Switch: string; AltSwitch: string = ''): Boolean; overload;
-function GetArgument(Strings: TStrings; Switch: string; AltSwitch: string = ''): Boolean; overload;
+//* Skip first param
+function ParseCommandLine(Content: string; Strings: TStrings; Switches: TArray<Char>; WhiteSpaces: TArray<Char>{ = [' ', #9]}; Quotes: TArray<Char> {= ['''', '"']}; ValueSeperators: TArray<Char> {= [':', '=']}): Integer; overload;
+function ParseCommandLine(Content: string; Strings: TStrings): Integer; overload;
+
+{
+  param1 param2 -s -w: value
+
+  =param1
+  =param2
+  -s
+  -w=value
+}
+
+function GetArgumentValue(Strings: TStrings; out Value: String; Switch: string; AltSwitch: string = ''): Boolean; overload;
+function GetArgumentSwitch(Strings: TStrings; Switch: string; AltSwitch: string = ''): Boolean; overload;
+
 //Get Param (non switch value by index)
 function GetArgument(Strings: TStrings; out Value: String; Index: Integer): Boolean; overload;
+
+function GetArgument(Strings: TStrings; OutStrings: TStrings; AltSwitch: string = ''): Boolean; overload;
+function GetArgument(Strings: TStrings; out OutStrings: TArray<String>): Boolean; overload;
 
 function StringsToString(Strings: TStrings; LineBreak: string = sLineBreak): string;
 
@@ -119,6 +139,8 @@ function PeriodToString(vPeriod: Double; WithSeconds: Boolean): string;
 function TicksToString(vTicks: Int64): string;
 function DequoteStr(Str: string; QuoteChar: string = #0): string;
 function ExcludeTrailing(Str: string; TrailingChar: string = #0): string;
+function RemoveEncloseStr(S, Left, Right: string): string;
+function EncloseStr(S, Left, Right: string): string;
 
 function RepeatString(const Str: string; Count: Integer): string;
 
@@ -126,12 +148,21 @@ function ConcatString(const S1, Delimiter: string; S2: string = ''): string;
 function CollectStrings(Strings: TStrings; Delimiter: Char = ','; TrailingChar: Char = #0): string; overload;
 function CollectStrings(Strings: array of string; Delimiter: Char = ','; TrailingChar: Char = #0): string; overload;
 
+function ReversePos(const SubStr, S : String): Integer; overload;
+function ReversePos(const SubStr, S: String; const Start: Integer): Integer; overload;
 
 {* VarReplace
   VarInit = '$'
   Example: VarReplace('c:\$project\$[name]';
 }
-function VarReplace(S: string; Values: TStrings; VarInit: string): string;
+type
+  TVarOptions = set of (
+    vrSmartLowerCase,
+    vrAllowBrackets //TODO
+  );
+  TVarReplacesCallbackProc = procedure(Sender: Pointer; Name: string; var Value: string);
+
+function VarReplace(S: string; Values: TStrings; Prefix: string; Suffix: String = ''; VarOptions: TVarOptions = []; Sender: Pointer = nil; ReplacesCallbackProc: TVarReplacesCallbackProc = nil): string; overload;
 
 type
   //alsCut = if the string > count we cut it as count or keep the string
@@ -203,8 +234,6 @@ function ISOStrToDate(ISODate: String; vDateSeparator: Char = '-'; TimeDivider: 
 function ISODateToStr(DateTime: TDateTime; vDateSeparator: Char = '-'; TimeDivider: Char = ' '; WithTime: Boolean = False): String; overload;
 function IsAllLowerCase(S: string): Boolean;
 
-function AnsiToUnicode(S: rawbytestring; CodePage: Integer = 0): string; 
-function StringAs(S: rawbytestring; CodePage: Integer = 0): utf8string; deprecated;
 //Zero Based
 function StringOf(const Value: Array of Byte; CodePage: Word = CP_UTF8): string; overload;
 function StringOf(const Value: TBytes; CodePage: Word = CP_UTF8): string; overload;
@@ -315,6 +344,30 @@ begin
     Result := Str;
 end;
 
+function RemoveEncloseStr(S, Left, Right: string): string;
+var
+  start, count: Integer;
+begin
+  if UpperCase(LeftStr(s, 1)) = UpperCase(Left) then
+    start := Length(Left) + 1
+  else
+    start := 0;
+  if UpperCase(RightStr(s, 1)) = UpperCase(Right) then
+    count := Length(Right)
+  else
+    count := 0;
+  count := Length(s) - start - count + 1;
+  Result := MidStr(S, start, count);
+end;
+
+function EncloseStr(S, Left, Right: string): string;
+begin
+  if S <> '' then
+    Result := Left + S + Right
+  else
+    Result := '';
+end;
+
 function AlignStr(const S: string; Count: Integer; Options: TAlignStrOptions; vChar: Char): string;
 var
   l: integer;
@@ -385,45 +438,80 @@ begin
   end;
 end;
 
+function ReversePos(const SubStr, S: String; const Start: Integer): Integer;
+var
+  i: Integer;
+  pStr: PChar;
+  pSub: PChar;
+begin
+  pSub := Pointer(SubStr);
+
+  for i := Start downto 1 do
+  begin
+    pStr := @(S[i]);
+    if (pStr^ = pSub^) then
+    begin
+      if CompareMem(pSub, pStr, Length(SubStr)) then
+      begin
+        Result := i;
+        exit;
+      end;
+    end;
+  end;
+  Result := 0;
+end;
+
+
+function ReversePos(const SubStr, S: String): Integer;
+begin
+  Result := ReversePos(SubStr, S, Length(S) - Length(SubStr) + 1);
+end;
+
 {**
 *  Replace multipe variables $var for example with value in Values
 *  Use name values in strings
 *}
 
-function VarReplace(S: string; Values: TStrings; VarInit: string): string;
+function VarReplace(S: string; Values: TStrings; Prefix: string; Suffix: String; VarOptions: TVarOptions; Sender: Pointer; ReplacesCallbackProc: TVarReplacesCallbackProc): string;
 var
-  Index: Integer;
   Start: Integer;
   OpenStart: Integer;
-  NewValue: string;
+  InsideBlock: Boolean;
   InitIndex: Integer;
-  procedure check;
+  procedure check(Index: Integer);
   var
-    l: Integer;
+    Name, Value: string;
   begin
+    //* string before variable
     Result := Result + MidStr(S, Start, OpenStart - Start);
-    Start := Index;
-    l := Index - OpenStart;
-    NewValue := MidStr(S, OpenStart, l);
-
-    if Values.IndexOfName(NewValue) >= 0 then
+    Name := MidStr(S, OpenStart + Length(Prefix), Index - OpenStart + 1 - Length(Prefix) - Length(Suffix));
+    if (LeftStr(Name, 1) = '[') and (RightStr(Name, 1) = ']') then
+      Name := MidStr(Name, 2, Length(Name) - 2);
+    Value := MidStr(S, OpenStart, Index - OpenStart + 1);
+    if Values.IndexOfName(Name) >= 0 then
     begin
-      //Index := Index + Length(NewValue) - 1;
-
-      NewValue := Values.Values[NewValue];
-      Result := Result + NewValue;
-    end;
+      if (vrSmartLowerCase in VarOptions) and IsAllLowerCase(Name) then //Smart idea, right ^.^
+        Value := LowerCase(Values.Values[Name])
+      else
+        Value := Values.Values[Name];
+    end
+    else if Assigned(ReplacesCallbackProc) then
+      ReplacesCallbackProc(Sender, Name, Value);
+    Result := Result + Value;
+    Start := Index + 1;
     OpenStart := 0;
   end;
 var
   Current: Char;
   Len: Integer;
-  InitLen: Integer;
+  Index: Integer;
 begin
+  if Length(Suffix) > 1 then
+    raise Exception.Create('');
+  InsideBlock := False;
   OpenStart := 0;
   Result := '';
   Len := Length(S);
-  InitLen := Length(VarInit);
   InitIndex := 1;
   Index := 1;
   Start := Index;
@@ -432,14 +520,27 @@ begin
     Current := S[Index];
     if (OpenStart > 0) then
     begin
-      if not CharInSet(Current, ['0'..'9', 'a'..'z', 'A'..'Z', '_', '{',  '#', '}']) then
-        Check;
-    end
-    else if (Current = VarInit[InitIndex]) then
-    begin
-      if InitIndex = InitLen then
+      if not InsideBlock and CharInSet(Current, ['[']) then
+        InsideBlock := True
+      else if InsideBlock and CharInSet(Current, [']']) then
+        InsideBlock := False;
+
+      if not InsideBlock then
       begin
-        OpenStart := Index - InitLen + 1;
+        if ((Suffix <> '') and (Current = Suffix[1])) then
+          Check(Index)
+        else if ((Suffix = '') and not CharInSet(Current, ['0'..'9', 'a'..'z', 'A'..'Z', '_'])) then
+        begin
+          Dec(Index);
+          Check(Index);
+        end;
+      end;
+    end
+    else if (Current = Prefix[InitIndex]) then
+    begin
+      if InitIndex = Length(Prefix) then
+      begin
+        OpenStart := Index - Length(Prefix) + 1;
         InitIndex := 1;
       end
       else
@@ -447,11 +548,10 @@ begin
     end
     else
       InitIndex := 1;
-
     Inc(Index);
   end;
   if (OpenStart > 0) then
-    Check;
+    Check(Index);
   Result := Result + MidStr(S, Start, MaxInt);
 end;
 
@@ -468,7 +568,7 @@ begin
   TStrings(Sender).Add(S); //Be sure sender is TStrings
 end;
 
-procedure StrToStringsDeqouteCallbackProc(Sender: Pointer; Index:Integer; S: string; var Resume: Boolean);
+procedure StrToStringsDequoteCallbackProc(Sender: Pointer; Index:Integer; S: string; var Resume: Boolean);
 var
   Name, Value: string;
   p: Integer;
@@ -661,19 +761,6 @@ begin
   Result := StrToStringsEx(Content, Strings, [#13, #10, #0], IgnoreInitialWhiteSpace, Quotes);
 end;}
 
-procedure ArgumentsCallbackProc(Sender: Pointer; Index: Integer; Name, Value: string; IsSwitch:Boolean; var Resume: Boolean);
-begin
-  if Index > 0 then //ignore first param (exe file)
-    with TObject(Sender) as TStrings do
-    begin
-      if (Name <> '') and (Value = '') then
-        Add(NameValueSeparator + Name)
-      else
-        Add(Name + NameValueSeparator + Value);
-    end;
-end;
-
-//  -t   --test cmd1 cmd2 -t: value -t:value -t value
 function ParseArgumentsCallback(Content: string; const CallBackProc: TArgumentsCallbackProc; Sender: Pointer; Switches: TArray<Char>; WhiteSpaces: TArray<Char>; Quotes: TArray<Char>; ValueSeperators: TArray<Char>; Options: TParseArgumentsOptions): Integer;
 var
   Start, Cur: Integer;
@@ -739,8 +826,8 @@ begin
         begin
           if NextIsValue then
           begin
-            if CharInArray(S[1], Switches) then //* hmmm maybe not
-              raise Exception.Create('Value excepted not a switch');
+{            if CharInArray(S[1], Switches) then //* hmmm maybe not //nop, what if i want value is minus
+              raise Exception.Create('Value excepted not a switch '+ S);}
             Value := S;
             NextIsValue := False;
           end
@@ -795,6 +882,22 @@ begin
   end;
 end;
 
+procedure ArgumentsCallbackProc(Sender: Pointer; Index: Integer; Name, Value: string; IsSwitch: Boolean; var Resume: Boolean);
+begin
+  with TObject(Sender) as TStrings do
+  begin
+    if (Name <> '') and (Value = '') then
+    begin
+      if IsSwitch then
+        Add(Name + NameValueSeparator)
+      else
+        Add(NameValueSeparator + Name)
+    end
+    else
+      Add(Name + NameValueSeparator + Value);
+  end;
+end;
+
 function ParseArgumentsCallback(Content: string; const CallBackProc: TArgumentsCallbackProc; Sender: Pointer): Integer; overload;
 begin
   Result := ParseArgumentsCallback(Content, @CallBackProc, Sender, ['-', '/'], [' ', #9], ['"', ''''], ['=', ':']);
@@ -810,7 +913,23 @@ begin
   Result := ParseArguments(Content, Strings, ['-', '/'], [' ', #9], ['"', ''''], ['=', ':']);
 end;
 
-function GetArgument(Strings: TStrings; out Value: String; Switch: string; AltSwitch: string = ''): Boolean;
+procedure CommandLineCallbackProc(Sender: Pointer; Index: Integer; Name, Value: string; IsSwitch: Boolean; var Resume: Boolean);
+begin
+  if Index > 0 then //ignore first param (exe file)
+    ArgumentsCallbackProc(Sender, Index, Name, Value, IsSwitch, Resume);
+end;
+
+function ParseCommandLine(Content: string; Strings: TStrings; Switches: TArray<Char>; WhiteSpaces: TArray<Char>; Quotes: TArray<Char>; ValueSeperators: TArray<Char>): Integer;
+begin
+  Result := ParseArgumentsCallback(Content, @CommandLineCallbackProc, Strings, Switches, WhiteSpaces, Quotes, ValueSeperators);
+end;
+
+function ParseCommandLine(Content: string; Strings: TStrings): Integer;
+begin
+  Result := ParseCommandLine(Content, Strings, ['-', '/'], [' ', #9], ['"', ''''], ['=', ':']);
+end;
+
+function GetArgumentValue(Strings: TStrings; out Value: String; Switch: string; AltSwitch: string = ''): Boolean;
 var
   I, P: Integer;
   S: string;
@@ -833,7 +952,7 @@ begin
   end;
 end;
 
-function GetArgument(Strings: TStrings; Switch: string; AltSwitch: string = ''): Boolean; overload;
+function GetArgumentSwitch(Strings: TStrings; Switch: string; AltSwitch: string = ''): Boolean; overload;
 var
   I, P: Integer;
   S: string;
@@ -882,6 +1001,66 @@ begin
       Exit(True);
       Dec(Index);
     end
+  end;
+end;
+
+function GetArgument(Strings: TStrings; OutStrings: TStrings; AltSwitch: string): Boolean;
+  procedure AddNow(S: string);
+  begin
+    OutStrings.Add(S);
+  end;
+var
+  I, P: Integer;
+  S, Value: string;
+begin
+  Result := False;
+  Value := '';
+  for I := 0 to Strings.Count - 1 do
+  begin
+    S := Strings[I];
+    P := Pos(Strings.NameValueSeparator, S);
+    if (P <> 0) then
+    begin
+      if (Copy(S, 1, P - 1) = '') then
+      begin
+        Value := Copy(S, P + 1, MaxInt);
+        AddNow(Value);
+        Result := True;
+      end;
+    end
+    else if (P = 0) then
+      AddNow(S);
+  end;
+end;
+
+function GetArgument(Strings: TStrings; out OutStrings: TArray<String>): Boolean;
+  procedure AddNow(S: string);
+  begin
+    SetLength(OutStrings, Length(OutStrings) + 1);
+    OutStrings[Length(OutStrings) -1] := S;
+  end;
+var
+  I, P: Integer;
+  S, Value: string;
+begin
+  OutStrings := [];
+  Result := False;
+  Value := '';
+  for I := 0 to Strings.Count - 1 do
+  begin
+    S := Strings[I];
+    P := Pos(Strings.NameValueSeparator, S);
+    if (P <> 0) then
+    begin
+      if (Copy(S, 1, P - 1) = '') then
+      begin
+        Value := Copy(S, P + 1, MaxInt);
+        AddNow(Value);
+        Result := True;
+      end;
+    end
+    else if (P = 0) then
+      AddNow(S);
   end;
 end;
 
@@ -1432,20 +1611,49 @@ begin
   end;
 end;
 
-function AnsiToUnicode(S: rawbytestring; CodePage: Integer): string;
-begin
-  if CodePage = 0 then
-    CodePage := SystemAnsiCodePage;
-  SetCodePage(S, CodePage, False);
-  Result := S;
-end;
+//* thanks to https://stackoverflow.com/a/41726706/585304
+type
+  TEncodingHelper = class helper for TEncoding
+  public
+    function GetString(Bytes: PByte; ByteCount: Integer): String; overload;
+    {$ifdef FPC}
+    function GetString(Bytes: array of Byte): String; overload;
+    {$endif}
+  end;
 
-function StringAs(S: rawbytestring; CodePage: Integer = 0): utf8string;
+  function TEncodingHelper.GetString(Bytes: PByte; ByteCount: Integer): String;
+  begin
+    {$ifdef FPC}
+    Result := '';
+    {$endif}
+    SetLength(Result, Self.GetCharCount(Bytes, ByteCount));
+    {$ifdef FPC}
+    Self.GetChars(Bytes, ByteCount, PUnicodeChar(Result), Length(Result));
+    {$else}
+    Self.GetChars(Bytes, ByteCount, PChar(Result), Length(Result));
+    {$endif}
+  end;
+
+  {$ifdef FPC}
+  function TEncodingHelper.GetString(Bytes: array of Byte): String;
+  var
+    L, Count: Integer;
+  begin
+    {$ifdef FPC}
+    Result := '';
+    {$endif}
+    L := Length(Bytes);
+    Count := GetCharCount(@Bytes[0], L);
+    if (Count = 0) and (L > 0) then
+      raise Exception.Create('Wrong encoding!');
+    SetLength(Result, Count);
+    GetChars(@Bytes[0], L, PUnicodeChar(Result), Count);
+  end;
+  {$endif}
+
+function StringOf(const Value: PByte; Size: Integer; CodePage: Word = CP_UTF8): string;
 begin
-  if CodePage = 0 then
-    CodePage := SystemAnsiCodePage;
-  SetCodePage(S, CodePage, False);
-  Result := S;
+  Result := TEncoding.GetEncoding(CodePage).GetString(Value, Size);
 end;
 
 function StringOf(const Value: array of Byte; CodePage: Word): string;
@@ -1458,24 +1666,6 @@ begin
   Result := TEncoding.GetEncoding(CodePage).GetString(Value);
 end;
 
-//* thanks to https://stackoverflow.com/a/41726706/585304
-type
-  TEncodingHelper = class helper for TEncoding
-  public
-    function GetString(Bytes: PByte; ByteCount: Integer): String;
-  end;
-
-function TEncodingHelper.GetString(Bytes: PByte; ByteCount: Integer): String;
-begin
-  SetLength(Result, Self.GetCharCount(Bytes, ByteCount));
-  Self.GetChars(Bytes, ByteCount, PChar(Result), Length(Result));
-end;
-
-function StringOf(const Value: PByte; Size: Integer; CodePage: Word = CP_UTF8): string;
-begin
-  Result := TEncoding.GetEncoding(CodePage).GetString(Value, Size);
-end;
-
 function IsAllLowerCase(S: string): Boolean;
 var
   i: Integer;
@@ -1483,7 +1673,11 @@ begin
   Result := True;
   for i := 1 to Length(S) do
   begin
+    {$ifdef FPC}
     if IsUpper(S[i]) then
+    {$else}
+    if S[i].IsUpper then
+    {$endif}
     begin
       Result := False;
       break;
@@ -1538,7 +1732,6 @@ end;
 function FirstFile(Path, Files: string): string;
 var
   FileList: TStringList;
-  f: string;
 begin
   FileList := TStringList.Create;
   try
@@ -1559,3 +1752,4 @@ initialization
   SystemAnsiCodePage := 1252; //scpAnsi has no meaning in linux, you can change it in your application
   {$endif}
 end.
+

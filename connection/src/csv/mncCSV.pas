@@ -391,7 +391,7 @@ end;
 
 function TmncCSVCommand.ReadLine(out Line: string): Boolean;
 var
-  t: rawbytestring;
+  t: RawByteString;
 begin
   Result := (FCSVStream <> nil) and not (cloRead in FCSVStream.Done);
   if Result then
@@ -471,7 +471,7 @@ begin
     raw := Utf8ToAnsi(s);}
     {$else}
     raw := AnsiString(s);//Here you can fix the bug
-    FCSVStream.WriteLineRawByte(raw);
+    FCSVStream.WriteAnsiString(raw);
     {$endif}
   end
   else
