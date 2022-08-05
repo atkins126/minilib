@@ -330,7 +330,7 @@ begin
   inherited;
   FDefaultDocument := TStringList.Create;
   UseKeepAlive := False;
-  Compressing := True;
+  UseCompressing := True;
 
   FDocumentRoot := '';
   FDefaultDocument.Add('index.html');
@@ -452,9 +452,26 @@ begin
     Result := 'application/binary';
 end;
 
+
+{function CompressSize(vData: PByte; vLen: Integer): TFileSize;
+var
+  p: Pointer;
+  aLen: Integer;
+begin
+  if vLen<>0 then
+  begin
+    ZCompress(Pointer(vData), vLen, p, aLen);
+    Result := aLen;
+    FreeMem(p);
+  end
+  else
+    Result := 0;
+end;}
+
+
 procedure TmodHttpGetCommand.RespondDocument(const vDocument: string; var Result: TmodRespondResult);
 var
-  DocSize: Int64;
+  aDocSize: Int64;
   aDocStream: TFileStream;
 begin
   if FileExists(vDocument) then
@@ -463,13 +480,17 @@ begin
     begin
       aDocStream := TFileStream.Create(vDocument, fmOpenRead or fmShareDenyWrite);
       try
-        DocSize := aDocStream.Size;
+        {if Respond.KeepAlive then
+          aDocSize := CompressSize(PByte(aDocStream.Memory), aDocStream.Size)
+        else}
+          aDocSize := aDocStream.Size;
+
         if Active then
         begin
           Respond.SendRespond('HTTP/1.1 200 OK');
           Respond.PostHeader('Content-Type', DocumentToContentType(vDocument));
           if Respond.KeepAlive then
-            Respond.PostHeader('Content-Length', IntToStr(DocSize));
+            Respond.PostHeader('Content-Length', IntToStr(aDocSize));
         end;
 
         Respond.SendHeader;
@@ -645,7 +666,7 @@ begin
     Respond.PostHeader('Keep-Alive', 'timout=' + IntToStr(Module.KeepAliveTimeOut div 5000) + ', max=100');
   end;
 
-  if Module.Compressing then
+  if Module.UseCompressing then
   begin
     if Request.Header['Accept-Encoding'].Have('gzip', [',']) then
       Respond.CompressClass := TmnGzipStreamProxy
