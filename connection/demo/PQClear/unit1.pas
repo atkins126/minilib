@@ -35,7 +35,7 @@ implementation
 procedure TForm1.Button1Click(Sender: TObject);
 var
 
-  aTR: TmncPGSession;
+  aTR: TmncPGTransaction;
   aCmd: TmncPGCommand;
 begin
   aDB := TmncPGConnection.Create;
@@ -52,7 +52,7 @@ begin
 
     //LogWrite(aDB.GetVersion);
 
-    aTR := aDB.CreateSession as TmncPGSession;
+    aTR := aDB.CreateTransaction as TmncPGTransaction;
     try
       aTR.Start;
       aCmd := aTR.CreateCommand as TmncPGCommand;
@@ -82,4 +82,3 @@ begin
 end;
 
 end.
-
