@@ -66,6 +66,12 @@ type
 
   { TmnLibrary }
 
+  TmnbLoadState = (lsInit, lsLoaded, lsFail);
+
+  TmnbLoadStateHelper = record helper for TmnbLoadState
+    function AsBoolean: Boolean;
+  end;
+
   TmnLibrary = class(TObject)
   private
   protected
@@ -74,17 +80,21 @@ type
     FLibraryName: string;
     LoadedLibrary: string;
     RaiseError: Boolean;
+    FInvalidNames: string;
     procedure Link; virtual; abstract;
     procedure Init; virtual;
   public
     constructor Create(ALibraryName: string); virtual;
-    function Load: Boolean;
+    destructor Destroy; override;
+
+    function Load(vSafe: Boolean = False): TmnbLoadState;
     function IsLoaded: Boolean;
     procedure Release;
     function GetAddress(const ProcedureName: string; ARaiseError: Boolean = False): Pointer; overload;
     procedure GetAddress(var ProcVariable: Pointer; const ProcedureName: string; ARaiseError: Boolean = False); overload;
     property Handle: TLibHandle read FHandle;
     property LibraryName: string read FLibraryName;
+    property InvalidNames: string read FInvalidNames;
   end;
 
 implementation
@@ -122,29 +132,37 @@ begin
   {$ENDIF}
 end;
 
-function TmnLibrary.Load: Boolean;
+function TmnLibrary.Load(vSafe: Boolean = False): TmnbLoadState;
+var
+  b: Boolean;
 begin
-  Result := not IsLoaded;
-  if Result then
+  if IsLoaded then
   begin
-
-    RefCount := RefCount + 1;
-    if RefCount = 1 then
+    Result := lsLoaded
+  end
+  else
+  begin
+    FHandle := InternalLoadLibrary(LibraryName);
+    if (FHandle = 0) then
     begin
-      FHandle := InternalLoadLibrary(LibraryName);
-      if (FHandle = 0) then
-      begin
-        RefCount := 0;
-        raise EInOutError.CreateFmt(SErrLoadFailed,[LibraryName]);
-      end
+      RefCount := 0;
+      //if RaiseError then //check with zaher
+      if not vSafe then
+        raise EInOutError.CreateFmt(SErrLoadFailed,[LibraryName])
       else
-      begin
-        LoadedLibrary := LibraryName;
-        Link;
-        Init;
-      end;
+        Result := lsFail;
+    end
+    else
+    begin
+      LoadedLibrary := LibraryName;
+      Link;
+      Init;
+      Result := lsInit;
     end;
   end;
+
+  if Result.AsBoolean then
+    Inc(RefCount);
 end;
 
 procedure TmnLibrary.Init;
@@ -175,6 +193,12 @@ begin
   GetAddress(Result, ProcedureName, ARaiseError);
 end;
 
+destructor TmnLibrary.Destroy;
+begin
+
+  inherited;
+end;
+
 procedure TmnLibrary.GetAddress(var ProcVariable: Pointer; const ProcedureName: string; ARaiseError: Boolean);
 begin
   if ProcVariable <> nil then
@@ -185,7 +209,21 @@ begin
     ProcVariable := nil;
   if (ProcVariable = nil) and (RaiseError or ARaiseError) then
     raise Exception.Create(ProcedureName + ' not found in ' + LoadedLibrary);
+
+  if (ProcVariable = nil) then
+  begin
+    if FInvalidNames<>'' then FInvalidNames := FInvalidNames + '#13';
+    FInvalidNames := FInvalidNames + ProcedureName;
+  end;
 end;
+
+{ TmnbLoadStateHelper }
+
+function TmnbLoadStateHelper.AsBoolean: Boolean;
+begin
+  Result := Self in [lsInit, lsLoaded];
+end;
+
 
 end.
 

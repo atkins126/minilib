@@ -207,6 +207,7 @@ type
     FChain: string;
     FOnDataRequest: TOnRequest;
     FData: Integer;
+    FTitle: string;
     //FDesignerCell: TmnrDesignCell;
     function GetReport: TmnrCustomReport;
     function GetTag: Integer;
@@ -223,7 +224,6 @@ type
     function GetExcludeSections: TmnrSectionClassIDs; virtual;
     function GetIncludeSections: TmnrSectionClassIDs; virtual;
     function GetName: string; virtual;
-    function GetTitle: string; virtual;
     function GetNumber: Integer; virtual;
     function GetLayouts: TmnrLayouts;
 
@@ -235,9 +235,7 @@ type
     function GetAsString: string; override;
     function GetAsVariant: Variant; override;
     function GetAsData: Integer; override;
-
   public
-
     function DisplayText: string; override;
     property Next: TmnrLayout read GetNext;
     property Prior: TmnrLayout read GetPrior;
@@ -245,7 +243,7 @@ type
     property Name: string read GetName;
     property Number: Integer read GetNumber;
     property Tag: Integer read GetTag;
-    property Title: string read GetTitle;
+    property Title: string read FTitle write FTitle;
     property Data: Integer read FData write FData;
     property Chain: string read FChain write FChain;
     property IncludeSections: TmnrSectionClassIDs read GetIncludeSections;
@@ -313,8 +311,9 @@ type
     function FindLayout(const vName: string): TmnrLayout;
     property Report: TmnrCustomReport read FReport;
     procedure InitLayouts;
+    function EnumLayouts: TmnrLayoutList;
 
-    function CreateLayout(const vGroup: string; vClass: TmnrLayoutClass; const vName: string; vOnRequest: TOnRequest = nil; vNumber: Integer = 0; vTag: Integer = 0; vIncludeSections: TmnrSectionClassIDs = []; vExcludeSections: TmnrSectionClassIDs = []): TmnrLayout;
+    function CreateLayout(const vGroup: string; vClass: TmnrLayoutClass; const vName: string; vOnRequest: TOnRequest = nil; const vTitle: string = ''; vNumber: Integer = 0; vTag: Integer = 0; vIncludeSections: TmnrSectionClassIDs = []; vExcludeSections: TmnrSectionClassIDs = []): TmnrLayout;
     procedure CreateRequest(const vName: string; vOnRequest: TOnRequest);
   end;
 
@@ -729,6 +728,8 @@ type
     procedure DoLoopError; virtual;
     function DoCreateReportDesgin: ImnrReportDesigner; virtual;
     procedure DoEnumExportRows(vList: TmnrRowList); virtual;
+    procedure DoUpdateDesignLayouts; virtual;
+    procedure UpdateDesignLayouts;
   public
     constructor Create;
     destructor Destroy; override;
@@ -841,8 +842,7 @@ begin
   Clear;
   DoLoad;
 
-  FDesignLayouts.Clear;
-  Sections.EnumLayouts(FDesignLayouts);
+  UpdateDesignLayouts;
 end;
 
 procedure TmnrCustomReport.AcceptNewRow(vRow: TmnrRow; var Accepted: Boolean);
@@ -880,7 +880,7 @@ begin
   FSections := DoCreateSections;
   FGroups := DoCreateGroups;
   FItems := DoCreateItems;
-  FRowsListIndex := nil;
+  FRowsListIndex := TmnrRowsIndex.Create(Self);
 
   //InitSections(FSections);
   FGroups.FReport := Self;
@@ -1056,6 +1056,11 @@ begin
 
 end;
 
+procedure TmnrCustomReport.DoUpdateDesignLayouts;
+begin
+
+end;
+
 function TmnrCustomReport.EnumExportRows: TmnrRowList;
 begin
   Result := TmnrRowList.Create;
@@ -1208,8 +1213,7 @@ end;
 
 procedure TmnrCustomReport.Finish;
 begin
-  FreeAndNil(FRowsListIndex); //in case of refill
-  FRowsListIndex := TmnrRowsIndex.Create(Self);
+  FRowsListIndex.Build;
 end;
 
 function TmnrCustomReport.Finished: Boolean;
@@ -1389,6 +1393,14 @@ begin
     else
       Result := '«·„Ã„Ê⁄';
   end;
+end;
+
+procedure TmnrCustomReport.UpdateDesignLayouts;
+begin
+  FDesignLayouts.Clear;
+
+  Sections.EnumLayouts(FDesignLayouts);
+  DoUpdateDesignLayouts;
 end;
 
 { TmnrCustomReportRowNode }
@@ -1785,7 +1797,6 @@ var
   Accepted: Boolean;
 begin
   aDesignRow := DesignRows.First;
-  aRow := nil;
   if aDesignRow <> nil then
   begin
     while aDesignRow <> nil do
@@ -2356,7 +2367,7 @@ begin
   begin
     c := First as TmnrCell;
     repeat
-      b := SameText(c.Layout.ClassName, vName);
+      b := (c.Layout<>nil) and SameText(c.Layout.ClassName, vName);
       b := b or SameText(c.DesignCell.Name, vName);
       b := b or SameText((c.DesignCell as TmnrDesignCell).AliasName, vName);
 
@@ -2460,7 +2471,10 @@ end;
 
 function TmnrLayout.DisplayText: string;
 begin
-  Result := Title;
+  if Title<>'' then
+    Result := Title
+  else
+    Result := Name;
 end;
 
 procedure TmnrLayout.DoCellsExchanged(vCell1, vCell2: TmnrCell);
@@ -2621,11 +2635,6 @@ end;
 function TmnrLayout.GetTag: Integer;
 begin
   Result := FTag;
-end;
-
-function TmnrLayout.GetTitle: string;
-begin
-  Result := FName;
 end;
 
 procedure TmnrLayout.InitDesignCell(vDesignCell: TmnrDesignCell);
@@ -2887,7 +2896,9 @@ end;
 procedure TmnrIndex.Build;
 begin
   if Report<>nil then
+  begin
     Compute(Report);
+  end;
 end;
 
 procedure TmnrIndex.Compute(vReport: TmnrCustomReport);
@@ -2923,7 +2934,7 @@ begin
   begin
     Result := First;
     while Result <> nil do
-      if SameText(Result.Name, vName) or SameText(Result.Name+IntToStr(Result.Number), vName) then //for layouts with same name but different numbers "example descriptors" :)
+      if SameText(Result.Name, vName) then
         Break
       else
         Result := Result.Next;
@@ -3521,7 +3532,7 @@ begin
 
 end;
 
-function TmnrGroups.CreateLayout(const vGroup: string; vClass: TmnrLayoutClass; const vName: string; vOnRequest: TOnRequest; vNumber: Integer; vTag: Integer; vIncludeSections, vExcludeSections: TmnrSectionClassIDs): TmnrLayout;
+function TmnrGroups.CreateLayout(const vGroup: string; vClass: TmnrLayoutClass; const vName: string; vOnRequest: TOnRequest; const vTitle: string; vNumber: Integer; vTag: Integer; vIncludeSections, vExcludeSections: TmnrSectionClassIDs): TmnrLayout;
 var
   aLayouts: TmnrLayouts;
 begin
@@ -3532,6 +3543,7 @@ begin
     aLayouts.Name := vGroup;
   end;
   Result := aLayouts.CreateLayout(vClass, vName, vOnRequest, vNumber, vTag, vIncludeSections, vExcludeSections);
+  Result.Title := vTitle;
 end;
 
 procedure TmnrGroups.CreateRequest(const vName: string; vOnRequest: TOnRequest);
@@ -3551,6 +3563,30 @@ begin
   Report.InitLayouts(Self); //belal: to do remove (self)
 end;
 
+function TmnrGroups.EnumLayouts: TmnrLayoutList;
+var
+  s: TmnrLayouts;
+  t: TmnrLayout;
+begin
+  Result := TmnrLayoutList.Create;
+  try
+    s := First;
+    while s<>nil do
+    begin
+      t := s.First;
+      while t<>nil do
+      begin
+        Result.Add(t);
+        t := t.Next;
+      end;
+      s := s.Next;
+    end;
+  except
+    FreeAndNil(Result);
+    raise;
+  end;
+end;
+
 function TmnrGroups.Find(const vName: string): TmnrLayouts;
 begin
   if vName = '' then
@@ -3568,17 +3604,24 @@ end;
 
 function TmnrGroups.FindLayout(const vName: string): TmnrLayout;
 var
-  l: TmnrLayouts;
+  l: TmnrLayoutList;
+  y: TmnrLayout;
 begin
-  Result := nil;
-  l := First;
-  while l<>nil do
+  if vName = '' then
+    Result := nil
+  else
   begin
-    Result := l.Find(vName);
-    if Result<>nil then
-      Break
-    else
-      l := l.Next;
+    l := EnumLayouts;
+    try
+      for y in l do
+      begin
+        if SameText(y.Name, vName) or SameText(y.Name+y.Number.ToString, vName) then //fix for adding number to name 22-11-2022 need back to sametext :)
+          Exit(y)
+      end;
+      Result := nil;
+    finally
+      l.Free;
+    end;
   end;
 end;
 

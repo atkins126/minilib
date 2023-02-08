@@ -24,6 +24,10 @@ type
 
   {$IFDEF FPC}
   TProc = Reference to procedure;
+  TProc<T> = reference to procedure (Arg1: T);
+  TProc<T1,T2> = reference to procedure (Arg1: T1; Arg2: T2);
+  TProc<T1,T2,T3> = reference to procedure (Arg1: T1; Arg2: T2; Arg3: T3);
+  TProc<T1,T2,T3,T4> = reference to procedure (Arg1: T1; Arg2: T2; Arg3: T3; Arg4: T4);
   {$endif}
 
   { TmnObject }
@@ -85,6 +89,7 @@ type
     function Add(Item: _Object_): Integer;
     procedure Insert(Index: Integer; Item: _Object_);
     function Extract(Item: _Object_): _Object_;
+    function IndexOfObject(Item: TObject): Integer;
     {$ifdef FPC} //not now
     function Require(Index: Integer): _Object_;
     {$endif}
@@ -254,6 +259,14 @@ end;
 function TmnObjectList<_Object_>.Add(Item: _Object_): Integer;
 begin
   Result := inherited Add(Item);
+end;
+
+function TmnObjectList<_Object_>.IndexOfObject(Item: TObject): Integer;
+begin
+  if Item is TClass(_Object_) then
+    Result := IndexOf(_Object_(Item))
+  else
+    Result := -1;
 end;
 
 procedure TmnObjectList<_Object_>.Insert(Index: Integer; Item: _Object_);

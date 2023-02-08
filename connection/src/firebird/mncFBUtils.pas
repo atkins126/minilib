@@ -42,9 +42,8 @@ function StatusVectorAsText(const StatusVector: TStatusVector): string;
 
 procedure FBAlloc(var P; OldSize, NewSize: Integer; ZeroInit: Boolean = True);
 procedure FBFree(var P: Pointer); overload;
-procedure FBFree(var P: PShort); overload;
+procedure FBFree(var P: PSmallInt); overload;
 procedure FBFree(var P: PXSQLDA); overload;
-
 
 function FBMax(n1, n2: Integer): Integer;
 function FBMin(n1, n2: Integer): Integer;
@@ -72,8 +71,8 @@ procedure SetFBDataBaseErrorMessages(Value: TFBDataBaseErrorMessages);
 function GetFBDataBaseErrorMessages: TFBDataBaseErrorMessages;
 
 procedure FBDatabaseInfo(const UserName, Password, Role, CharacterSet: string; vParams: TStrings);
-procedure GenerateDPB(sl: TStrings; out DPB: AnsiString; var DPBLength: Short);
-procedure GenerateTPB(sl: TStrings; out TPB: AnsiString; var TPBLength: Short);
+procedure GenerateDPB(sl: TStrings; out DPB: AnsiString; var DPBLength: SmallInt);
+procedure GenerateTPB(sl: TStrings; out TPB: AnsiString; var TPBLength: SmallInt);
 
 function GenerateDPBEx(vParams: TStrings): TBytes;
 function GenerateTPBEx(vParams: TStrings): TBytes;
@@ -518,7 +517,7 @@ begin
   P := nil;
 end;
 
-procedure FBFree(var P: PShort); overload;
+procedure FBFree(var P: PSmallInt); overload;
 begin
   FBFree(Pointer(p));
 end;
@@ -663,7 +662,7 @@ function GenerateDPBEx(vParams: TStrings): TBytes;
 
 var
   i, j, pval: Integer;
-  DPBVal: UShort;
+  DPBVal: Word;
   ParamName, ParamValue: AnsiString;
   aCount: Integer;
 begin
@@ -758,10 +757,10 @@ begin
   SetLength(Result, aCount);
 end;
 
-procedure GenerateDPB(sl: TStrings; out DPB: AnsiString; var DPBLength: Short);
+procedure GenerateDPB(sl: TStrings; out DPB: AnsiString; var DPBLength: SmallInt);
 var
   i, j, pval: Integer;
-  DPBVal: UShort;
+  DPBVal: Word;
   ParamName, ParamValue: AnsiString;
 begin
   { The DPB is initially empty, with the exception that
@@ -963,7 +962,7 @@ begin
   SetLength(Result, aCount);
 end;
 
-procedure GenerateTPB(sl: TStrings; out TPB: AnsiString; var TPBLength: Short);
+procedure GenerateTPB(sl: TStrings; out TPB: AnsiString; var TPBLength: SmallInt);
 var
   i, j, TPBVal, ParamLength: Integer;
   ParamName, ParamValue: AnsiString;
@@ -1037,6 +1036,8 @@ begin
 
   if not IsLocal and (Host <> '') then
   begin
+    {if Port = '' then
+      Port := '3050';}
     if (Port <> '') and (AnsiPos('/', Host) = 0) then
       Host := Host + '/' + Port;
     Result := Host + ':' + DatabaseName;
