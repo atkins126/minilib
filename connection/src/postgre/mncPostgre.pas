@@ -124,7 +124,7 @@ type
     class function Capabilities: TmncCapabilities; override;
     class function EngineName: string; override;
     property Handle: PPGconn read FHandle;
-    procedure Execute(vSQL: string); overload; override;
+    procedure Execute(const vSQL: string); overload; override;
 
     procedure Interrupt;
     //TODO: Reconnect  use PQReset
@@ -132,7 +132,7 @@ type
     procedure CreateDatabase(const vName: string; CheckExists: Boolean = False); overload; override;
     procedure DropDatabase(const vName: string; CheckExists: Boolean = False); overload; override;
     procedure RenameDatabase(const vName, vToName: string); overload;
-    function IsDatabaseExists(vName: string): Boolean; override;
+    function IsDatabaseExists(const vName: string): Boolean; override;
     function EnumDatabases: TStrings;
     procedure TerminateConnections(const vResource: string);
     function GetParamChar: string; override;
@@ -164,7 +164,7 @@ type
     function NewToken: string;//used for new command name
     procedure DoStart; override;
     procedure DoStop(How: TmncTransactionAction; Retaining: Boolean); override;
-    function InternalCreateCommand: TmncSQLCommand; override;
+    function DoCreateCommand: TmncSQLCommand; override;
   public
     constructor Create(vConnection: TmncConnection); override;
     destructor Destroy; override;
@@ -249,7 +249,6 @@ type
     FCommand: TmncCustomPGCommand;
   protected
     function DoCreateField(vColumn: TmncColumn): TmncField; override;
-    function Find(const vName: string): TmncItem; override;
     property Command: TmncCustomPGCommand read FCommand;
 
   public
@@ -364,6 +363,7 @@ type
     function GetActive: Boolean; override;
     procedure DoClose; override;
     procedure ClearStatement; virtual;
+    function GetParseOptions: TmncParseSQLOptions; override;
   public
     function GetRowsChanged: Integer; override;
     function GetLastInsertID: Int64;
@@ -838,7 +838,7 @@ begin
   Result := TmncPGTransaction.Create(Self);
 end;
 
-function TmncPGConnection.IsDatabaseExists(vName: string): Boolean;
+function TmncPGConnection.IsDatabaseExists(const vName: string): Boolean;
 var
   s: UTF8String;
   r: PPGresult;
@@ -931,7 +931,7 @@ procedure TmncPGConnection.DoResetConnection(PGResult: PPGresult; var vResume: B
 begin
 end;
 
-procedure TmncPGConnection.Execute(vSQL: string);
+procedure TmncPGConnection.Execute(const vSQL: string);
 var
   s: utf8string;
   r: PPGresult;
@@ -947,7 +947,7 @@ end;
 
 { TmncPGTransaction }
 
-function TmncPGTransaction.InternalCreateCommand: TmncSQLCommand;
+function TmncPGTransaction.DoCreateCommand: TmncSQLCommand;
 begin
   Result := TmncPGCommand.CreateBy(Self);
 end;
@@ -1059,6 +1059,11 @@ begin
   Result := 0;
 end;
 
+function TmncPGCommand.GetParseOptions: TmncParseSQLOptions;
+begin
+  Result := [psoAddParamsID];
+end;
+
 procedure TmncPGCommand.DoExecute;
 var
   Values: TArrayOfPChar;
@@ -1160,7 +1165,6 @@ var
 begin
   FBOF := True;
   FHandle := Transaction.NewToken;
-  ParseSQL([psoAddParamsID]);
   c := Transaction.DBHandle;
   s := UTF8Encode(GetProcessedSQL);
 
@@ -1462,11 +1466,6 @@ end;
 function TmncPostgreFields.DoCreateField(vColumn: TmncColumn): TmncField;
 begin
   Result := TmncPostgreField.Create(vColumn);
-end;
-
-function TmncPostgreFields.Find(const vName: string): TmncItem;
-begin
-  Result := inherited Find(vName);
 end;
 
 function TmncPostgreFields.IsNull: Boolean;

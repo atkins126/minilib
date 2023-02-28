@@ -35,14 +35,14 @@ type
 
   TmncSQLiteConnection = class(TmncSQLConnection)
   private
-    FAutoCreate: Boolean;
-    FCorrectDateTime: Boolean;
     FDBHandle: PSqlite3;
+    FCorrectDateTime: Boolean;
     FExclusive: Boolean;
     FJournalMode: TmncJournalMode;
     FReadCommited: Boolean;
     FSynchronous: TmncSynchronous;
     FTempStore: TmncTempStore;
+    FAutoCreate: Boolean;
     procedure SetExclusive(const AValue: Boolean);
     procedure SetJournalMode(const AValue: TmncJournalMode);
     procedure SetReadCommited(const AValue: Boolean);
@@ -54,6 +54,7 @@ type
     function GetConnected:Boolean; override;
     procedure CheckError(Error: Integer; const ExtraMsg: string = '');
     procedure DoInit; override;
+    function DoGetNextIDSQL(const vName: string; vStep: Integer): string; override;
   public
     constructor Create; override;
     class function Capabilities: TmncCapabilities; override;
@@ -61,11 +62,11 @@ type
     function CreateTransaction: TmncSQLTransaction; overload; override; 
     procedure Interrupt;
     procedure CreateDatabase(const vName: string; CheckExists: Boolean =False); override;
-    function IsDatabaseExists(vName: string): Boolean; override;
+    function IsDatabaseExists(const vName: string): Boolean; override;
     procedure DropDatabase(const vName: string; CheckExists: Boolean = False); override;
     procedure Vacuum; override;
     function GetVersion: string;
-    procedure Execute(Command: string); override;
+    procedure Execute(const vSQL: string); override;
     property Exclusive: Boolean read FExclusive write SetExclusive;
     property ReadCommited: Boolean read FReadCommited write SetReadCommited;
     property Synchronous: TmncSynchronous read FSynchronous write FSynchronous default syncDefault;
@@ -91,11 +92,11 @@ type
     procedure DoStart; override;
     procedure DoStop(How: TmncTransactionAction; Retaining: Boolean); override;
     function GetActive: Boolean; override;
-    function InternalCreateCommand: TmncSQLCommand; override;
+    function DoCreateCommand: TmncSQLCommand; override;
   public
     constructor Create(vConnection: TmncConnection); override;
     destructor Destroy; override;
-    procedure Execute(SQL: string);
+    procedure Execute(const vSQL: string); override;
     function GetLastRowID: Int64;
     function GetRowsChanged: Integer;
     property Connection: TmncSQLiteConnection read GetConnection write SetConnection;
@@ -175,8 +176,6 @@ type
     function GetDone: Boolean; override;
     function GetActive:Boolean; override;
     procedure DoClose; override;
-    procedure DoCommit; override;
-    procedure DoRollback; override;
     function CreateFields(vColumns: TmncColumns): TmncFields; override;
     function CreateParams: TmncParams; override;
     function CreateBinds: TmncBinds; override;
@@ -248,6 +247,7 @@ begin
 end;
 
 function SQLTypeToType(vType: Integer; const MetaType: string): TmncDataType;
+
   function isDate: Boolean;
   begin
     Result := SameText(MetaType, 'date') or SameText(MetaType, 'timestamp') or SameText(MetaType, 'datetime');
@@ -288,6 +288,8 @@ begin
     begin
       if SameText(MetaType, 'Blob') then
         Result := dtBlob
+      else if SameText(MetaType, 'timestamp') then
+        Result := dtDateTime
       else
         Result := dtString;
     end
@@ -336,6 +338,27 @@ begin
   FreeBuffer;
   inherited;
 end;
+
+//no need, we processes in fetchvalues
+{belal: copy from prmSQLite use fetch values :)}
+{function TprmSQLiteField.GetAsDateTime: TDateTime;
+var
+  s: string;
+  d: Double;
+begin
+  s := AsString;
+  if (s<>'')and(s<>'0') then
+  begin
+    d := StrToFloatDef(s, 0);
+    if d=0 then
+      Result := ISOStrToDate(s)
+    else
+      Result := d;
+  end
+  else
+    Result := 0;
+end;
+}
 
 { TmncSQLiteFields }
 
@@ -398,7 +421,7 @@ begin
   //TODO
 end;
 
-function TmncSQLiteConnection.IsDatabaseExists(vName: string): Boolean;
+function TmncSQLiteConnection.IsDatabaseExists(const vName: string): Boolean;
 begin
   Result := FileExists(vName);
 end;
@@ -460,6 +483,11 @@ begin
   {$endif}
 end;
 
+function TmncSQLiteConnection.DoGetNextIDSQL(const vName: string; vStep: Integer): string;
+begin
+  Result := Format('select max(''%s'')+%d', [vName, vStep]); //belal: check max
+end;
+
 { TmncSQLiteTransaction }
 
 destructor TmncSQLiteTransaction.Destroy;
@@ -467,14 +495,14 @@ begin
   inherited;
 end;
 
-function TmncSQLiteTransaction.InternalCreateCommand: TmncSQLCommand;
+function TmncSQLiteTransaction.DoCreateCommand: TmncSQLCommand;
 begin
   Result := TmncSQLiteCommand.Create;
 end;
 
-procedure TmncSQLiteTransaction.Execute(SQL: string);
+procedure TmncSQLiteTransaction.Execute(const vSQL: string);
 begin
-  Connection.Execute(UTF8Encode(SQL));
+  Connection.Execute(UTF8Encode(vSQL));
 end;
 
 procedure TmncSQLiteTransaction.DoStart;
@@ -492,14 +520,14 @@ begin
     Execute('BEGIN');
 end;
 
-procedure TmncSQLiteConnection.Execute(Command: string);
+procedure TmncSQLiteConnection.Execute(const vSQL: string);
 var
  lMsg  : PUtf8Char;
  s : Utf8String;
  r  : integer;
 begin
   lMSg := nil;
-  s := Command;
+  s := vSQL;
   r := sqlite3_exec(FDBHandle, PUtf8Char(s), nil, nil, @lMsg);
   if lMSg <> nil then
   begin
@@ -738,7 +766,7 @@ begin
             s := VarToStr(Binds[i].Param.Value) + #0;
             Binds[i].AllocBuffer(PUtf8Char(s)^, Length(s));
           end;
-          CheckError(sqlite3_bind_text(FStatment, i + 1, PAnsiChar(Binds[i].Buffer), -1, nil)); //up to #0
+          CheckError(sqlite3_bind_text(FStatment, i + 1, PUTF8Char(Binds[i].Buffer), -1, nil)); //up to #0
           //CheckError(sqlite3_bind_text(FStatment, i + 1, PChar(Binds[i].Buffer), Binds[i].BufferSize, nil)); not work with empty string not null
         end;
       end;
@@ -787,12 +815,7 @@ begin
   FLastStepResult := 0;
 //  sqlite3_prepare_v2
 //TODO: apply value of params if using injection mode
-  CheckError(sqlite3_prepare(Connection.DBHandle, PAnsiChar(GetProcessedSQL), -1 , @FStatment, @FTail));
-end;
-
-procedure TmncSQLiteCommand.DoRollback;
-begin
-  Transaction.Rollback;
+  CheckError(sqlite3_prepare(Connection.DBHandle, PUtf8Char(UTF8Encode(GetProcessedSQL)), -1 , @FStatment, @FTail));
 end;
 
 function TmncSQLiteCommand.CreateFields(vColumns: TmncColumns): TmncFields;
@@ -816,18 +839,13 @@ begin
   FStatment := nil;  
 end;
 
-procedure TmncSQLiteCommand.DoCommit;
-begin
-  Transaction.Commit;
-end;
-
 procedure TmncSQLiteCommand.FetchColumns;
 var
   i: Integer;
   c: Integer;
   aName: string;
   FieldType: Integer;
-  MetaType: PAnsiChar;
+  MetaType: PUTF8Char;
   aColumn: TmncColumn;
 begin
   Columns.Clear;
@@ -920,15 +938,19 @@ begin
             v.i := sqlite3_column_bytes(FStatment, i);
             SetLength(str, v.i);
             Move(PByte(sqlite3_column_blob(FStatment, i))^, PByte(str)^, v.i);
+            aCurrent.Add(i, str);
           end
           else if aColumn.DataType in [dtDate, dtTime, dtDateTime] then
           begin
             str := sqlite3_column_text(FStatment, i);
             v.d := ISOStrToDate(str);
+            aCurrent.Add(i, v.d);
           end
           else
+          begin
             str := sqlite3_column_text(FStatment, i);
             aCurrent.Add(i, str);
+          end;
         end
         else
         begin

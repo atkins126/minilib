@@ -18,15 +18,30 @@ unit mncConnections;
   Columns Fields and Params
   Columns has info about Fields, like Name, Size, Type etc...,
   while Fields have only the values, the idea, is you can use one Columns with multiple records,
-  record here is the Fields
+  record here is the Fields with more info, maybe include columns inside
 
   Params not need that technique.
+
+  Column have metadata, name, datatype
+  Fields have only Values, no name, no datatype
+  Param have metadata and values
+
+  TODO:
+    use Dictonary hash list for Fields
+    remove Retain
+    Can we assign params before prepare?
+    detach to record (clone)
+    Nested Fields (for REST)
+      CMD.Fields['Name'].AsString
+      CMD.Fields['Data', 'Name'].AsString
+      CMD.Fields['Data'].AsFields['Name'].AsString
 }
 
 interface
 
 uses
   Classes, SysUtils, DateUtils, Variants, Contnrs, SyncObjs, Types,
+  Generics.Collections,
   mnFields, mncCommons;
 
 type
@@ -84,6 +99,13 @@ type
       cstCreated  //When use autocreate and it is created
     );
 
+  TmncMode = (
+      mcmStrict,
+      mcmAutoStart
+    );
+
+  TmncModes = set of TmncMode;
+
   TmncStates = set of TmncState;
 
   TmncServerInfo = record
@@ -108,6 +130,7 @@ type
     FTransactions: TmncTransactions;
     FStartCount: Integer;
     FStates: TmncStates;
+    FMode: TmncModes;
     procedure SetConnected(const Value: Boolean);
     procedure SetParams(const AValue: TStrings);
     procedure ParamsChanging(Sender: TObject);
@@ -140,6 +163,8 @@ type
     procedure SetState(aState: TmncState);
     property Transactions: TmncTransactions read FTransactions;
     property AutoStart: Boolean read FAutoStart write FAutoStart; //AutoStart the Transaction when created
+    property Mode: TmncModes read FMode write FMode;
+    function IsStrict: Boolean; virtual;
     property Connected: Boolean read GetConnected write SetConnected;
     property Active: Boolean read GetConnected write SetConnected;
     property States: TmncStates read FStates;
@@ -151,7 +176,7 @@ type
     property Password: string read FServerInfo.Password write FServerInfo.Password;
     property Role: string read FServerInfo.Role write FServerInfo.Role;
     property ServerInfo: TmncServerInfo read FServerInfo write SetServerInfo;
-    property StartCount: Integer read FStartCount;
+    property StartCount: Integer read FStartCount write FStartCount;
 
     property Params: TStrings read FParams write SetParams;
     property OnConnected: TNotifyEvent read FOnConnected write FOnConnected;
@@ -181,9 +206,9 @@ type
     FConnection: TmncConnection;
     FStartCount: Integer;
     FAction: TmncTransactionAction;
-    FCurrentAction: TmncTransactionAction;
-    FIsInit: Boolean;
     FParamsChanged: Boolean;
+    FIsInit: Boolean;
+    FCurrentAction: TmncTransactionAction;
     procedure SetParams(const Value: TStrings);
     procedure SetConnection(const Value: TmncConnection);
     procedure SetActive(const Value: Boolean);
@@ -221,8 +246,9 @@ type
     property Params: TStrings read FParams write SetParams;
   end;
 
-  TmncDataType = (dtUnknown, dtString, dtBoolean, dtInteger, dtCurrency, dtFloat, dtDate, dtTime, dtDateTime, dtMemo, dtBlob, dtBig {bigint or int64}{, dtEnum, dtSet});
-  TmncSubType = (dstBinary, dstImage, dstText, dstXML, dstJSON);
+  TmncDataType = (dtUnknown, dtString, dtBoolean, dtInteger, dtCurrency, dtFloat, dtDate, dtTime, dtDateTime, dtMemo, dtBlob, dtBig {bigint or int64}, dtUUID{, dtEnum, dtSet});
+  TmncSubType = (dstBinary, dstText, dstImage, dstXML, dstJSON);
+  TmncBlobType = (blobBinary, blobText);
 
 {
   TmncItem base class for Column and Field and Param
@@ -233,36 +259,40 @@ type
 
   { TmncItem }
 
-  TmncItem = class(TmnCustomField)
+  TmncItem = class abstract(TmnCustomField)
   private
+    FBlobType: TmncBlobType;
   protected
     FDataType: TmncDataType;
     function GetAsText: string; override;
     procedure SetAsText(const AValue: string); override;
+    property BlobType: TmncBlobType read FBlobType write FBlobType default blobBinary;
     property DataType: TmncDataType read FDataType default dtUnknown;
   public
     function IsNumber: Boolean;
+    function GetName: string; virtual; abstract;
   published
   end;
 
-  TmncCustomColumnClass = class of TmncItem;
-
   { TmncItems }
 
-  TmncItems = class(TmnFields)
+  TmncItems<T: TmncItem> = class abstract(TmnCustomFields<T>)
   private
-    function GetItem(Index: Integer): TmncItem; overload;
+    FDic: TDictionary<string, T>;
   protected
-    function Find(const vName: string): TmncItem; virtual; abstract;
+    function Find(const vName: string): T;
+    function ItemByName(const vName: string): T;
+    {$ifdef FPC}
+    procedure Notify(Ptr: Pointer; Action: TListNotification); override;
+    {$else}
+    procedure Notify(const Value: T; Action: TCollectionNotification); override;
+    {$endif}
   public
-    function Add(AColumn: TmncItem): Integer; overload;
-    function ItemByName(const vName: string): TmncItem;
-    function IsExists(const vName: string): Boolean;
-    property Items[Index: Integer]: TmncItem read GetItem;
+    constructor Create;
+    destructor Destroy; override;
   end;
 
   TmnDataOption = (doRequired, doNullable);
-
   TmnDataOptions = set of TmnDataOption;
 
   { TmncColumn }
@@ -287,6 +317,8 @@ type
     procedure SetSize(AValue: Int64); virtual;
     procedure SetType(vType: TmncDataType);
     procedure SetDecimals(AValue: Integer);
+   public
+    function GetName: string; override;
   published
     property Index: Integer read FIndex write FIndex;
     property FullName: string read FFullName write FFullName; //TODO
@@ -307,26 +339,25 @@ type
 
   { TmncColumns }
 
-  TmncColumns = class(TmncItems)
+  TmncColumns = class(TmncItems<TmncColumn>)
   private
-    function GetItem(Index: Integer): TmncColumn;
   protected
-    function Find(const vName: string): TmncItem; override;
   public
+    procedure Assign(Source: TmncColumns); virtual;
     function Add(vIndex: Integer; vName: string; vType: TmncDataType; FieldClass: TmncColumnClass = nil): TmncColumn; overload;
     function Add(vName: string; vType: TmncDataType): TmncColumn; overload;
     function Add(vColumn: TmncColumn): Integer; overload;
     procedure Clone(FromColumns: TmncColumns; AsDataType: TmncDataType); overload;
     procedure Clone(FromColumns: TmncColumns); overload;
-    property Items[Index: Integer]: TmncColumn read GetItem; default;
   end;
 
   { TmncCustomField }
 
-  TmncCustomField = class(TmncItem)
+  TmncCustomField = class abstract(TmncItem) //Param and Field
   private
   protected
   public
+
     property AsUtf8String;
   published
     //property IsBlob;
@@ -336,11 +367,14 @@ type
     property Value;
     property AsVariant;
     property AsString;
+    {$ifndef NEXTGEN}
     property AsAnsiString;
+    {$endif}
     property AsTrimString;
     property AsNullString;
     property AsInteger;
     property AsInt64;
+    property AsForeign;
     property AsBoolean;
     property AsCurrency;
     property AsDate;
@@ -349,25 +383,17 @@ type
     property AsText; //binary text blob convert to hex
     property AsHex;
     property AsDouble;
+    property AsBytes;
   end;
 
   { TmncCustomFields }
 
-  TmncCustomFields = class(TmncItems)
+  TmncCustomFields<T: TmncCustomField> = class abstract(TmncItems<T>)
   private
-    function GetItem(Index: Integer): TmncCustomField;
   protected
     //Called before release it, good to deattach the handles
-    procedure Detach; virtual;
   public
-    property Items[Index: Integer]: TmncCustomField read GetItem;
-  end;
-
-  TmncRecord = class(TmncCustomFields)
-  private
-    function GetItemByName(const Index: string): TmncCustomField;
-  public
-    property Item[const Index: string]: TmncCustomField read GetItemByName; default;
+    procedure Detach; virtual; //move to TmncRecord
   end;
 
   { TmncField }
@@ -378,34 +404,44 @@ type
   protected
   public
     constructor Create(vColumn: TmncColumn); virtual;
-    function GetName: string;
+    function GetName: string; override;
   published
     property Column: TmncColumn read FColumn write FColumn;
   end;
 
   { TmncFields }
 
-  TmncFields = class(TmncRecord)
+  TmncFields = class(TmncCustomFields<TmncField>)
   private
     FColumns: TmncColumns;
-    FRowID: Integer;
+    FRowID: Int64;
     function GetItem(Index: Integer): TmncField;
     function GetField(const Index: string): TmncField;
+    function GetValues(const Index: string): Variant;
+    procedure SetValues(const Index: string; const AValue: Variant);
+    function SetValue(const Index: string; const AValue: Variant): TmncField;
   protected
-    function Find(const vName: string): TmncItem; override;
     function DoCreateField(vColumn: TmncColumn): TmncField; virtual; abstract;
   public
     constructor Create(vColumns: TmncColumns); virtual;
     function CreateField(vColumn: TmncColumn): TmncField; reintroduce; overload;
     function CreateField(vIndex: Integer): TmncField; reintroduce; overload;
+    function IsExist(const vName: string): Boolean;
     function FieldByName(const vName: string): TmncField;
     function Add(Column: TmncColumn): TmncField; overload;
     function Add(Column: TmncColumn; Value: Variant): TmncField; overload;
     function Add(Index: Integer; Value: Variant): TmncField; overload;
     property Columns: TmncColumns read FColumns;
     property Field[const Index: string]: TmncField read GetField; default;
+
     property Items[Index: Integer]: TmncField read GetItem;
-    property RowID: Integer read FRowID write FRowID default 0; //most of SQL engines have this value
+    property Values[const Index: string]: Variant read GetValues write SetValues;
+    property RowID: Int64 read FRowID write FRowID default 0; //most of SQL engines have this value
+  end;
+
+  TmncRecord = class(TmncFields) //*TODO: use it insteadof TmncFields
+  private
+  public
   end;
 
   { TmncParam }
@@ -417,20 +453,18 @@ type
   public
     constructor Create; virtual;
     destructor Destroy; override;
+    function GetName: string; override;
     property Name: string read FName write FName;
   end;
 
   { TmncCustomParams }
 
-  TmncCustomParams = class(TmncRecord)
-  private
+  TmncCustomParams = class(TmncCustomFields<TmncParam>)
   protected
     function GetParam(const Index: string): TmncParam;
     function GetItem(Index: Integer): TmncParam;
-    function Find(const vName: string): TmncItem; override;
   public
     procedure Clear; override;
-    function FindParam(const vName: string): TmncParam;
     function ParamByName(const vName: string): TmncParam;
     property Items[Index: Integer]: TmncParam read GetItem;
     property Param[const Index: string]: TmncParam read GetParam; default;
@@ -443,10 +477,9 @@ type
   protected
     function CreateParam: TmncParam; virtual; abstract;
   public
-    constructor Create; virtual;
     function Add(Name: string): TmncParam;
     //Add it if not exists
-    function Found(const Name: string): TmncParam;
+    function Require(const Name: string): TmncParam;
   end;
 
   { TmncBind }
@@ -510,6 +543,8 @@ type
     FParsed: Boolean;
     FPrepared: Boolean;
     FNextOnExecute: Boolean;
+    FIndex: Int64;
+    FID: Int64;
     function GetValues(const Index: string): Variant;
     procedure SetRequest(const Value: TStrings);
     procedure SetColumns(const Value: TmncColumns);
@@ -517,32 +552,28 @@ type
     procedure SetParams(const Value: TmncParams);
     function GetField(const Index: string): TmncField;
     function GetParam(const Index: string): TmncParam;
+    function GetIndex: Int64;
   protected
     FRequest: TStrings;
     procedure SetActive(const Value: Boolean); override;
     procedure CheckActive;
     procedure CheckInactive;
-    procedure CheckStarted; // Check the Transaction is started if need transaction
+    procedure CheckTransaction; // Check the Transaction is started if need transaction
     function GetDone: Boolean; virtual; abstract;
     procedure DoParse; virtual; abstract;
-    procedure DoUnparse; virtual;
     procedure DoPrepare; virtual; abstract;
     procedure DoUnprepare; virtual;
     procedure DoExecute; virtual; abstract; //Here apply the Binds and execute the sql
     procedure DoNext; virtual; abstract;
     procedure DoClose; virtual; abstract;
-    procedure DoCommit; virtual; //some time we need make commit with command or Transaction
-    procedure DoRollback; virtual;
-    procedure Clean; virtual; //Clean and reset stamemnt like Done or Ready called in Execute before DoExecute and after Prepare
+    procedure Reset; virtual; //Reset and reset stamemnt like Done or Ready called in Execute before DoExecute and after Prepare
     procedure DoRequestChanged(Sender: TObject); virtual;
     function CreateFields(vColumns: TmncColumns): TmncFields; virtual; abstract;
     function CreateColumns: TmncColumns; virtual;
     function CreateParams: TmncParams; virtual; abstract;
     function CreateBinds: TmncBinds; virtual;
-    procedure Fetch; virtual; //Called before DoNext
     property Request: TStrings read FRequest write SetRequest;
-    property Binds: TmncBinds read FBinds; //for Dublicated names when pass the params when execute select * from t1 where f1 = ?p1 and f2 = ?p1 and f3=p2
-    function InternalExecute(vNext: Boolean): Boolean;
+    function InternalExecute(vNext: Boolean): Boolean; virtual;
   public
     constructor Create; override;
     destructor Destroy; override;
@@ -562,23 +593,24 @@ type
     function Step: Boolean; //Execute and Next for while loop() without using next at end of loop block //TODO not yet
     procedure Close;
     procedure Clear; virtual;
-    procedure Commit;
-    procedure Rollback;
     //Detach make Fields or Params unrelated to DB handles, you can use them in salfty in arrays
     property Done: Boolean read GetDone;
     function DetachFields: TmncFields;
     function DetachParams: TmncParams;
-    function FieldIsExist(const Name: string): Boolean;
     property NextOnExecute: Boolean read FNextOnExecute write FNextOnExecute default True;
     property Parsed: Boolean read FParsed;
     property Prepared: Boolean read FPrepared;
     property Columns: TmncColumns read FColumns write SetColumns;
     property Fields: TmncFields read FFields write SetFields; //Current record loaded in memory, it is nil sometime if no data, do not access it if no data exists
+    property Binds: TmncBinds read FBinds; //for Dublicated names when pass the params when execute select * from t1 where f1 = ?p1 and f2 = ?p1 and f3=p2
     property Field[const Index: string]: TmncField read GetField;
     property Params: TmncParams read FParams write SetParams;
     property Param[const Index: string]: TmncParam read GetParam;
     property Values[const Index: string]: Variant read GetValues;
     property Options: TmncCommandOptions read FOptions write FOptions;
+    property Index: Int64 read GetIndex; //* RowIndex
+    property ID: Int64 read FID write FID; //*TODO: deprecated;
+    property Tag: Int64 read FID write FID; //*TODO: deprecated;
   end;
 
 { Simple classes usful for rapid implmetation }
@@ -808,6 +840,11 @@ procedure TmncConnection.DoInit;
 begin
 end;
 
+function TmncConnection.IsStrict: Boolean;
+begin
+  Result := (mcmStrict in Mode) or (ccStrict in Capabilities);
+end;
+
 procedure TmncConnection.Prepare;
 begin
 end;
@@ -834,13 +871,12 @@ end;
 
 procedure TmncCommand.Clear;
 begin
-  DoUnparse;
   FPrepared := False;
   FRequest.Clear;
   if FParams <> nil then
     FParams.Clear;
   FBinds.Clear;
-  Clean;
+  //Reset;
 end;
 
 destructor TmncCommand.Destroy;
@@ -863,6 +899,7 @@ end;
 
 procedure TmncCommand.DoRequestChanged(Sender: TObject);
 begin
+  FParsed := False;
   if Active then
     Close;
 end;
@@ -877,22 +914,6 @@ begin
   Result := TmncBinds.Create;
 end;
 
-procedure TmncCommand.Fetch;
-begin
-end;
-
-function TmncCommand.InternalExecute(vNext: Boolean): Boolean;
-begin
-  if not FPrepared then
-    Prepare;
-  Clean;
-  DoExecute;
-  if vNext and not Done then //TODO Check it do we need not Done
-    Result := Next
-  else
-    Result := not Done;
-end;
-
 constructor TmncCommand.Create;
 begin
   inherited Create;
@@ -903,6 +924,24 @@ begin
   FParams := CreateParams;
   FBinds := CreateBinds;
   FNextOnExecute := True;
+end;
+
+function TmncCommand.InternalExecute(vNext: Boolean): Boolean;
+begin
+  if not FPrepared then
+    Prepare;
+  Reset;
+  DoExecute;
+  if vNext and not Done then //TODO Check it do we need not Done
+  begin
+    FIndex := -1;
+    Result := Next;
+  end
+  else
+  begin
+    FIndex := 0;
+    Result := not Done;
+  end;
 end;
 
 function TmncCommand.Step: Boolean;
@@ -918,19 +957,19 @@ begin
   Result := InternalExecute(FNextOnExecute);
 end;
 
-function TmncCommand.FieldIsExist(const Name: string): Boolean;
-begin
-  Result := Fields.Find(Name) <> nil;
-end;
-
 function TmncCommand.GetField(const Index: string): TmncField;
 begin
-  if not Prepared then
-    Prepare;
+  {if not Prepared then
+    Prepare;}
   if Fields <> nil then
     Result := Fields.Field[Index]
   else
-    raise EmncException.Create('Current record not found');
+    Result := nil;
+end;
+
+function TmncCommand.GetIndex: Int64;
+begin
+  Result := FIndex;
 end;
 
 function TmncCommand.GetParam(const Index: string): TmncParam;
@@ -940,7 +979,7 @@ begin
   if Params <> nil then
     Result := Params.Param[Index]
   else
-    raise EmncException.Create('Params is nil');
+    Result := nil;
 end;
 
 procedure TmncCommand.CheckActive;
@@ -955,7 +994,7 @@ begin
     raise EmncException.Create('Command is active/opened');
 end;
 
-procedure TmncCommand.CheckStarted;
+procedure TmncCommand.CheckTransaction;
 begin
   if (Transaction = nil) then
     raise EmncException.Create('Transaction not assigned');
@@ -967,39 +1006,30 @@ begin
   }
 end;
 
-procedure TmncCommand.DoUnparse;
-begin
-  FParsed := False;
-end;
-
 procedure TmncCommand.DoUnprepare;
 begin
 end;
 
-procedure TmncCommand.DoCommit;
-begin
-end;
-
-procedure TmncCommand.DoRollback;
-begin
-end;
-
-procedure TmncCommand.Clean;
+procedure TmncCommand.Reset;
 begin
 end;
 
 function TmncCommand.Next: Boolean;
 begin
-  Fetch;
   DoNext;
   Result := not Done;
+  if Result then
+    Inc(FIndex);
 end;
 
 procedure TmncCommand.Prepare;
 begin
+  if FPrepared then
+    raise EmncException.Create('Command is already prepared!');
   if not FParsed then
     Parse;
-  CheckStarted;
+  { TODO : Clear Columns and Fields }
+  CheckTransaction;
   DoPrepare;
   FPrepared := True;
   if Params <> nil then
@@ -1017,13 +1047,6 @@ function TmncCommand.DetachParams: TmncParams;
 begin
   Result := FParams;
   FParams := nil;
-end;
-
-procedure TmncCommand.Rollback;
-begin
-  if Active then
-    Close;
-  DoRollback;
 end;
 
 procedure TmncCommand.SetActive(const Value: Boolean);
@@ -1066,6 +1089,18 @@ begin
   //TODO OnRequestChanged;
 end;
 
+procedure TmncCommand.Close;
+begin
+{  if not Active then
+    raise EmncException.Create('Command already Closed');}
+
+  if Prepared then
+    DoUnprepare;
+  //Reset; Maybe not
+  DoClose;
+  FPrepared := False;
+end;
+
 function TmncCommand.GetValues(const Index: string): Variant;
 begin
   if not Prepared then
@@ -1075,6 +1110,8 @@ begin
   else
     raise EmncException.Create('Current record not found');
 end;
+
+{ TmncLinkTransaction }
 
 procedure TmncLinkTransaction.SetTransaction(AValue: TmncTransaction);
 begin
@@ -1092,50 +1129,11 @@ begin
   Transaction := vTransaction;//Transaction not FTransaction
 end;
 
-procedure TmncCommand.Commit;
-begin
-  if Active then
-    Close;
-  DoCommit;
-end;
-
-procedure TmncCommand.Close;
-begin
-  if not Active then
-    raise EmncException.Create('Command already Closed');
-
-  if Prepared then
-    DoUnprepare;
-  Clean;
-  DoClose;
-  DoUnparse;
-  FPrepared := False;
-end;
-
 { TmncTransaction }
 
 procedure TmncTransaction.Commit(Retaining: Boolean = False);
 begin
   InternalStop(sdaCommit, Retaining);
-end;
-
-constructor TmncTransaction.Create(vConnection: TmncConnection);
-var
-  aBehaviors: TmncTransactionBehaviors;
-begin
-  aBehaviors := [];
-  if ccStrict in vConnection.Capabilities then
-    aBehaviors := aBehaviors + [sbhStrict];
-  if ccTransaction in vConnection.Capabilities then
-  begin
-{    if ccMultiConnection in vConnection.Model.Capabilities then //deprecated
-      aBehaviors := aBehaviors + [sbhMultiple, sbhIndependent]
-    else }if ccMultiTransaction in vConnection.Capabilities then
-      aBehaviors := aBehaviors + [sbhMultiple]
-    else
-      aBehaviors := aBehaviors + [sbhEmulate]
-  end;
-  Create(vConnection, aBehaviors);
 end;
 
 constructor TmncTransaction.Create(vConnection: TmncConnection; vBehaviors: TmncTransactionBehaviors);
@@ -1149,6 +1147,23 @@ begin
   FBehaviors := vBehaviors;
   if Connection.AutoStart then
     Start;
+end;
+
+constructor TmncTransaction.Create(vConnection: TmncConnection);
+var
+  aBehaviors: TmncTransactionBehaviors;
+begin
+  aBehaviors := [];
+  if ccStrict in vConnection.Capabilities then
+    aBehaviors := aBehaviors + [sbhStrict];
+  if ccTransaction in vConnection.Capabilities then
+  begin
+    if ccMultiTransaction in vConnection.Capabilities then
+      aBehaviors := aBehaviors + [sbhMultiple]
+    else
+      aBehaviors := aBehaviors + [sbhEmulate]
+  end;
+  Create(vConnection, aBehaviors);
 end;
 
 destructor TmncTransaction.Destroy;
@@ -1193,10 +1208,12 @@ end;
 
 procedure TmncTransaction.InternalStart;
 begin
-  if Active then //Even if not strict, you cant start the Transaction more than one
-    raise EmncException.Create('Transaction is already active.');
-  Connection.CheckActive;
-  //Connection.Init; //Sure if the connection is initialized, maybe it is not connected yet!
+  if Connection.IsStrict then
+  begin
+    if Active then //Even if not strict, you cant start the Transaction more than one?
+      raise EmncException.Create('Transaction is already active.');
+    Connection.CheckActive; //* TODO move out of strict
+  end;
   Init;
   if sbhEmulate in Behaviors then
   begin
@@ -1214,11 +1231,10 @@ end;
 
 procedure TmncTransaction.InternalStop(How: TmncTransactionAction; Retaining: Boolean);
 begin
-  if not Active then //Even if not strict we check if active, because you cant stop Transaction if you not started it!
+  if Connection.IsStrict and (not Active) then //Even if not strict we check if active, because you cant stop Transaction if you not started it!
     raise EmncException.Create('Oops you have not started it yet!');
 
-  if not Retaining then
-    Links.Close;
+  //Links.Close; belal: conceder this case cmd1  begin trans cmd2 end trans => force cmd1 close
 
   if sbhEmulate in Behaviors then
   begin
@@ -1230,15 +1246,22 @@ begin
     begin
       if Connection.FStartCount = 0 then
         raise EmncException.Create('Transaction not started yet!');
-      Dec(Connection.FStartCount);
-     if (FCurrentAction > How) then
-        raise EmncException.Create('there is older action rollbacked!'); //in emulate mode you can't do rollback, then commit if we have 2 Transaction started
-      FCurrentAction := How;
-      if Connection.FStartCount = 0 then
+
+      if (FCurrentAction > How) then
+      begin
+        How := FCurrentAction;
+        //raise EmncException.Create('there is older action rollbacked!'); //in emulate mode you can't do rollback, then commit if we have 2 Transaction started
+      end
+      else
+        FCurrentAction := How;
+
+      if Connection.FStartCount = 1 then //* Last transaction
       begin
         DoStop(How, Retaining);
-        FCurrentAction := sdaCommit;
-      end;
+        Dec(Connection.FStartCount); //* Dec here after stop, if Stop raise exception no dec for startcount
+      end
+      else if Connection.FStartCount > 0 then
+        Dec(Connection.FStartCount);
     end;
   end
   else if sbhMultiple in Behaviors then
@@ -1362,7 +1385,7 @@ end;
 
 function TmncFields.GetField(const Index: string): TmncField;
 begin
-  Result := FieldByName(Index);
+  Result := Find(Index);
 end;
 
 function TmncFields.GetItem(Index: Integer): TmncField;
@@ -1372,21 +1395,35 @@ begin
   Result := (inherited Items[Index]) as TmncField;
 end;
 
-function TmncFields.Find(const vName: string): TmncItem;
+function TmncFields.GetValues(const Index: string): Variant;
 var
-  i: Integer;
+  F: TmncField;
 begin
-  Result := nil;
-  for i := 0 to Count - 1 do
-  begin
-    if Items[i].Column = nil then
-      raise EmncException.Create('Field item not have Column');
-    if SameText(vName, Items[i].Column.Name) then
-    begin
-      Result := Items[i];
-      break;
-    end;
-  end;
+  F := Find(Index);
+  if F <> nil then
+    Result := F.Value
+  else
+    Result := Unassigned;
+end;
+
+function TmncFields.IsExist(const vName: string): Boolean;
+begin
+  Result := Find(vName) <> nil;
+end;
+
+function TmncFields.SetValue(const Index: string; const AValue: Variant): TmncField;
+begin
+  Result := FieldByName(Index);
+  Result.Value := AValue;
+end;
+
+procedure TmncFields.SetValues(const Index: string; const AValue: Variant);
+var
+  Field: TmncField;
+begin
+  Field := FieldByName(Index);
+  if Field<>nil then
+    Field.Value := AValue;
 end;
 
 { TmncColumns }
@@ -1413,6 +1450,11 @@ begin
   Result := inherited Add(vColumn);
 end;
 
+procedure TmncColumns.Assign(Source: TmncColumns);
+begin
+
+end;
+
 procedure TmncColumns.Clone(FromColumns: TmncColumns; AsDataType: TmncDataType);
 var
   i: Integer;
@@ -1427,26 +1469,6 @@ var
 begin
   for i := 0 to FromColumns.Count -1 do
     Add(FromColumns[i].Name, FromColumns[i].DataType);
-end;
-
-function TmncColumns.Find(const vName: string): TmncItem;
-var
-  i: Integer;
-begin
-  Result := nil;
-  for i := 0 to Count - 1 do
-  begin
-    if SameText(vName, Items[i].Name) then
-    begin
-      Result := Items[i];
-      break;
-    end;
-  end;
-end;
-
-function TmncColumns.GetItem(Index: Integer): TmncColumn;
-begin
-  Result := inherited Items[Index] as TmncColumn;
 end;
 
 { TmncField }
@@ -1465,11 +1487,6 @@ begin
     Result := Column.Name;
 end;
 
-constructor TmncParams.Create;
-begin
-  inherited;
-end;
-
 function TmncParams.Add(Name: string): TmncParam;
 begin
   Result := CreateParam as TmncParam;
@@ -1477,9 +1494,9 @@ begin
   inherited Add(Result);
 end;
 
-function TmncParams.Found(const Name: string): TmncParam;
+function TmncParams.Require(const Name: string): TmncParam;
 begin
-  Result := FindParam(Name) as TmncParam;
+  Result := Find(Name);
   if Result = nil then
     Result := Add(Name);
 end;
@@ -1489,36 +1506,16 @@ begin
   inherited;
 end;
 
-function TmncCustomParams.FindParam(const vName: string): TmncParam;
-begin
-  Result := Find(vName) as TmncParam;
-end;
-
 function TmncCustomParams.ParamByName(const vName: string): TmncParam;
 begin
-  Result := FindParam(vName);
+  Result := Find(vName);
   if Result = nil then
     raise EmncException.Create('Param ' + vName + ' not found');
 end;
 
-function TmncCustomParams.Find(const vName: string): TmncItem;
-var
-  i: Integer;
-begin
-  Result := nil;
-  for i := 0 to Count - 1 do
-  begin
-    if SameText(vName, Items[i].Name) then
-    begin
-      Result := Items[i] as TmncParam;
-      break;
-    end;
-  end;
-end;
-
 function TmncCustomParams.GetParam(const Index: string): TmncParam;
 begin
-  Result := ParamByName(Index);
+  Result := Find(Index);
 end;
 
 function TmncCustomParams.GetItem(Index: Integer): TmncParam;
@@ -1587,6 +1584,11 @@ begin
   //raise EmncException.Create('Field have no value, You must not use it, try use Fields!');
 end;
 
+function TmncColumn.GetName: string;
+begin
+  Result := Name;
+end;
+
 function TmncColumn.GetValue: Variant;
 begin
   Result := null;
@@ -1603,6 +1605,11 @@ end;
 destructor TmncParam.Destroy;
 begin
   inherited;
+end;
+
+function TmncParam.GetName: string;
+begin
+  Result := Name;
 end;
 
 constructor TmncParam.Create;
@@ -1650,17 +1657,7 @@ end;
 
 { TmncCustomFields }
 
-function TmncCustomFields.GetItem(Index: Integer): TmncCustomField;
-begin
-  Result := (inherited Items[Index]) as TmncCustomField;
-end;
-
-function TmncRecord.GetItemByName(const Index: string): TmncCustomField;
-begin
-  Result := ItemByName(Index) as TmncCustomField;
-end;
-
-procedure TmncCustomFields.Detach;
+procedure TmncCustomFields<T>.Detach;
 begin
 end;
 
@@ -1668,7 +1665,8 @@ end;
 
 function TmncItem.GetAsText: string;
 begin
-  if DataType in [dtBlob] then
+  //if (IsBlob) and (BlobType = blobText) then
+  if (DataType in [dtBlob]) and (BlobType = blobBinary) then
     Result := AsHex
   else
     Result := inherited GetAsText;
@@ -1676,7 +1674,8 @@ end;
 
 procedure TmncItem.SetAsText(const AValue: string);
 begin
-  if DataType in [dtBlob] then
+  //if (IsBlob) and (BlobType = blobText) then
+  if (DataType in [dtBlob]) and (BlobType = blobBinary) then
     AsHex := AValue
   else
     inherited SetAsText(AValue);
@@ -1687,32 +1686,76 @@ begin
   Result := DataType in [dtInteger, dtCurrency, dtFloat];
 end;
 
-{ TmncItems }
+{ TmncItems<T> }
 
-function TmncItems.GetItem(Index: Integer): TmncItem;
+constructor TmncItems<T>.Create;
 begin
-  Result := (inherited Items[Index]) as TmncItem;
+  inherited Create;
+  FDic := TDictionary<string, T>.Create(256);
 end;
 
-function TmncItems.Add(AColumn: TmncItem): Integer;
+destructor TmncItems<T>.Destroy;
 begin
-  Result := inherited Add(AColumn);
+  FreeAndNil(FDic);
+  inherited;
 end;
 
-function TmncItems.ItemByName(const vName: string): TmncItem;
+function TmncItems<T>.Find(const vName: string): T;
+var
+  i: integer;
+begin
+  if FDic <> nil then
+    FDic.TryGetValue(vName.ToLower, Result)
+  else
+  begin
+    Result := nil;
+    if vName <> '' then
+      for i := 0 to Count - 1 do
+      begin
+        if SameText(Items[i].GetName, vName) then
+        begin
+          Result := Items[i];
+          break;
+        end;
+      end;
+  end;
+end;
+
+function TmncItems<T>.ItemByName(const vName: string): T;
 begin
   Result := Find(vName);
-  if Result = nil then
-    raise Exception.Create('Field "' + vName + '" not found');
+  if Result =nil then
+    raise EmncException.Create('Can not find ' + vName);
 end;
 
-function TmncItems.IsExists(const vName: string): Boolean;
+{$ifdef FPC}
+procedure TmncItems<T>.Notify(Ptr: Pointer; Action: TListNotification);
+{$else}
+procedure TmncItems<T>.Notify(const Value: T; Action: TCollectionNotification);
+{$endif}
 begin
-  Result := Find(vName) <> nil;
+  if FDic <> nil then
+  begin
+    {$ifdef FPC}
+    if Action in [lnExtracted, lnDeleted] then //Need it in FPC https://forum.lazarus.freepascal.org/index.php/topic,60984.0.html
+      FDic.Remove(T(Ptr).GetName.ToLower);//bug in fpc
+    {$else}
+    if Action in [cnExtracting, cnRemoved, cnDeleting] then
+      FDic.Remove(Value.GetName.ToLower);
+    {$endif}
+    inherited;
+    {$ifdef FPC}
+    if Action = lnAdded then
+      FDic.AddOrSetValue(T(Ptr).GetName.ToLower, T(Ptr));
+    {$else}
+    if Action = cnAdded then
+      FDic.AddOrSetValue(Value.GetName.ToLower, Value);
+    {$endif}
+  end
+  else
+    inherited;
 end;
 
 initialization
-
 finalization
-
 end.

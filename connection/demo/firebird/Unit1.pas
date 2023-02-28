@@ -6,6 +6,7 @@ interface
 
 uses
   Classes, SysUtils, FileUtil, LResources, Forms, Controls, Graphics, Dialogs,
+  mnClasses,
   StdCtrls, ExtCtrls, mncFirebird, mncCSV,
   mncConnections, memds;
 
@@ -149,6 +150,7 @@ begin
     Conn.Connect;
     Transaction := TmncFBTransaction.Create(Conn);
     try
+      Transaction.Start;
       Cmd := TmncFBCommand.CreateBy(Transaction);
       Cmd.SQL.Text := 'select * from employee';
 //      Cmd.SQL.Add('where employee = ?employee');
