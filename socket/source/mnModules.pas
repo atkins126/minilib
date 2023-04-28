@@ -13,12 +13,14 @@
  *
  *
  }
- {
+ {  HEAD:
               userinfo       host      port
               ┌──┴───┐ ┌──────┴──────┐ ┌┴┐
   GET https://john.doe@www.example.com:123/forum/questions/?tag=networking&order=newest#top HTTP/1.1
   └┬┘    └─┬─┘   └───────────┬───────────┘└───────┬───────┘└───────────┬─────────────┘ └┬─┘ └─────┬┘
   method scheme          authority               path                query             fragment   protocol
+  └┬┘                                     └──┬──┘
+  Command                                  Module                     Params
 
   https://en.wikipedia.org/wiki/Uniform_Resource_Identifier
 
@@ -73,7 +75,7 @@ type
 
     //from URI :) URI = Address + Params
     Address: Utf8string;
-    Params: Utf8string;
+    Query: Utf8string;
 
     Path: Utf8string;
 
@@ -88,6 +90,7 @@ type
   private
     FHeader: TmnHeader;
     FStream: TmnBufferStream;
+    FContentLength: Integer;
     procedure SetRequestHeader(AValue: TmnHeader);
   protected
     Info: TmodRequestInfo;
@@ -102,13 +105,14 @@ type
     property URI: Utf8string read Info.URI write Info.URI;
     property Protocol: Utf8string read Info.Protocol write Info.Protocol;
     property Address: Utf8string read Info.Address write Info.Address;
-    property Params: Utf8string read Info.Params write Info.Params;
+    property Query: Utf8string read Info.Query write Info.Query;
     //for module
     property Path: Utf8string read Info.Path write Info.Path;
     property Module: String read Info.Module write Info.Module;
     property Command: String read Info.Command write Info.Command;
     property Client: String read Info.Client write Info.Client;
 
+    property ContentLength: Integer read FContentLength write FContentLength;
     property Stream: TmnBufferStream read FStream write FStream;
     property Header: TmnHeader read FHeader write SetRequestHeader;
     function CollectURI: string;
@@ -127,7 +131,7 @@ type
   end;
 
   TmodRespondState = (
-    resRespondSent, //reposnd line, first line before header
+    resHeadSent, //reposnd line, first line before header
     resHeaderSent,
     resContentsSent,
     //resSuccess,
@@ -145,6 +149,11 @@ type
     FHeader: TmnHeader;
     //FRespondResult: TmodRespondResult;
     FStream: TmnBufferStream;
+  protected
+    function HeadText: string; virtual;
+    procedure DoSendHeader; virtual;
+    procedure DoHeaderSent; virtual;
+    procedure SendHead;
   public
     constructor Create;
     destructor Destroy; override;
@@ -154,14 +163,11 @@ type
     //property RespondResult: TmodRespondResult read FRespondResult;
 
     //Add new header, can dublicate
-    procedure PostHeader(AName, AValue: String); virtual;
-    //Update header by name
-    procedure SetHeader(AName, AValue: String); virtual;
+    procedure AddHeader(AName, AValue: String); virtual;
     //Update header by name but adding new value to old value
-    procedure PutHeader(AName, AValue: String); virtual;
-    procedure SendHeader; virtual;
+    procedure PutHeader(AName, AValue: String);
 
-    procedure SendRespond(ALine: String); virtual;
+    procedure SendHeader;
   end;
 
   TmodModule = class;
@@ -188,7 +194,6 @@ type
     function GetActive: Boolean;
   protected
     procedure Prepare(var Result: TmodRespondResult); virtual;
-    procedure RespondError(ErrorNumber: Integer; ErrorMessage: String); virtual;
     procedure RespondResult(var Result: TmodRespondResult); virtual;
     function Execute: TmodRespondResult; virtual;
     procedure Unprepare(var Result: TmodRespondResult); virtual; //Shutdown it;
@@ -269,6 +274,7 @@ type
     procedure Reload; virtual;
     procedure Init; virtual;
     procedure Idle; virtual;
+    procedure InternalError(ARequest: TmodRequest; ARequestStream: TmnBufferStream; ARespondStream: TmnBufferStream; var Handled: Boolean); virtual;
   public
     constructor Create(const AName, AAliasName: String; AProtocols: TArray<String>; AModules: TmodModules); virtual;
     destructor Destroy; override;
@@ -505,24 +511,33 @@ begin
   inherited;
 end;
 
-procedure TmodRespond.PostHeader(AName, AValue: String);
+procedure TmodRespond.DoHeaderSent;
 begin
-  if resHeaderSent in FStates then
-    raise TmodModuleException.Create('Header is sent');
-  Header.Add(AName, AValue);
+
 end;
 
-procedure TmodRespond.SetHeader(AName, AValue: String);
+procedure TmodRespond.DoSendHeader;
 begin
-  if resHeaderSent in FStates then
-    raise TmodModuleException.Create('Header is sent');
-  Header.Put(AName, AValue);
+end;
+
+function TmodRespond.HeadText: string;
+begin
+  Result := '';
+end;
+
+procedure TmodRespond.AddHeader(AName, AValue: String);
+begin
+  if resContentsSent in FStates then
+    raise TmodModuleException.Create('Content is sent');
+
+  Header.Add(AName, AValue);
 end;
 
 procedure TmodRespond.PutHeader(AName, AValue: String);
 begin
   if resHeaderSent in FStates then
     raise TmodModuleException.Create('Header is sent');
+
   Header.Put(AName, AValue);
 end;
 
@@ -531,11 +546,10 @@ var
   item: TmnField;
   s: String;
 begin
-  if not (resRespondSent in FStates) then
-    raise TmodModuleException.Create('Respond line not sent');
   if resHeaderSent in FStates then
     raise TmodModuleException.Create('Header is sent');
-  FStates := FStates + [resHeaderSent];
+
+  SendHead;
 
   for item in Header do
   begin
@@ -543,15 +557,32 @@ begin
     //WriteLn(s);
     Stream.WriteLineUTF8(S);
   end;
+
+  DoSendHeader; //enter after
+
   Stream.WriteLineUTF8(Utf8string(''));
+  FStates := FStates + [resHeaderSent];
+
+  DoHeaderSent;
+
+  {s := '';
+  for item in Header do
+  begin
+    s := s + item.GetNameValue(': ')+Stream.EndOfLine;
+  end;
+ // s := s + Stream.EndOfLine;
+  Stream.WriteLineUTF8(Utf8string(s));}
 end;
 
-procedure TmodRespond.SendRespond(ALine: String);
+procedure TmodRespond.SendHead;
 begin
-  if resRespondSent in FStates then
+  if resHeadSent in FStates then
     raise TmodModuleException.Create('Respond is sent');
-  Stream.WriteLineUTF8(ALine);
-  FStates := FStates + [resRespondSent];
+  if HeadText='' then
+    raise TmodModuleException.Create('head not set');
+
+  Stream.WriteLineUTF8(HeadText);
+  FStates := FStates + [resHeadSent];
 end;
 
 { TmodRequest }
@@ -567,8 +598,8 @@ end;
 
 function TmodRequest.CollectURI: string;
 begin
-  if Params<>'' then
-    Result := Address+'?'+Params
+  if Query<>'' then
+    Result := Address+'?'+Query
   else
     Result := Address;
 end;
@@ -669,7 +700,6 @@ begin
       end
       else
         try
-          aModule.ParseHead(aRequest);
           aRequest.Client := RemoteIP;
           Result := aModule.Execute(aRequest, Stream, Stream);
         finally
@@ -790,10 +820,6 @@ procedure TmodCommand.RespondResult(var Result: TmodRespondResult);
 begin
 end;
 
-procedure TmodCommand.RespondError(ErrorNumber: Integer; ErrorMessage: String);
-begin
-end;
-
 procedure TmodCommand.Unprepare(var Result: TmodRespondResult);
 begin
 end;
@@ -869,6 +895,11 @@ begin
 end;
 
 procedure TmodModule.Init;
+begin
+
+end;
+
+procedure TmodModule.InternalError(ARequest: TmodRequest; ARequestStream: TmnBufferStream; ARespondStream: TmnBufferStream; var Handled: Boolean);
 begin
 
 end;
@@ -967,12 +998,14 @@ end;
 function TmodModule.Execute(ARequest: TmodRequest; ARequestStream: TmnBufferStream; ARespondStream: TmnBufferStream): TmodRespondResult;
 var
   aCMD: TmodCommand;
+  aHandled: Boolean;
 begin
   CreateCommands;
 
   Result.Status := [erSuccess];
 
 
+  ParseHead(ARequest);
   ParseHeader(ARequest.Header, ARequestStream);
 
   aCmd := RequestCommand(ARequest, ARequestStream, ARespondStream);
@@ -980,19 +1013,20 @@ begin
   if aCMD <> nil then
   begin
     try
-      try
-        Result := aCMD.Execute;
-        Result.Status := Result.Status + [erSuccess];
-      except
-        on E: Exception do
-          aCMD.RespondError(500, E.Message);
-      end;
+      Result := aCMD.Execute;
+      Result.Status := Result.Status + [erSuccess];
     finally
       FreeAndNil(aCMD);
     end;
   end
   else
-    raise TmodModuleException.Create('Can not find command or fallback command: ' + ARequest.Command);
+  begin
+    aHandled := False;
+    InternalError(ARequest, ARequestStream, ARespondStream, aHandled);
+
+    if not aHandled then
+      raise TmodModuleException.Create('Can not find command or fallback command: ' + ARequest.Command);
+  end;
 end;
 
 procedure TmodModule.ExecuteCommand(CommandName: String; ARequestStream: TmnBufferStream; ARespondStream: TmnBufferStream; RequestString: TArray<String>);
@@ -1115,7 +1149,7 @@ begin
   ARequest.Clear;
   ARequest.Raw := RequestLine;
   ParseRaw(RequestLine, ARequest.Info.Method, ARequest.Info.Protocol, ARequest.Info.URI);
-  ParseURI(ARequest.URI, ARequest.Info.Address, ARequest.Info.Params);
+  ParseURI(ARequest.URI, ARequest.Info.Address, ARequest.Info.Query);
 end;
 
 function TmodModules.Match(ARequest: TmodRequest): TmodModule;

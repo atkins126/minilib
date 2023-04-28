@@ -251,6 +251,9 @@ type
     function WriteRawByte(const S: UTF8String): TFileSize; overload;
     function WriteUTF8(const S: UTF8String): TFileSize; overload;
     function WriteLineUTF8(const S: UTF8String): TFileSize; overload;
+    {$ifndef FPC}
+    function WriteLineUTF8(const S: string): TFileSize; overload;
+    {$endif}
 
     {$ifndef NEXTGEN}
     function WriteAnsiString(const S: ansistring): TFileSize; overload;
@@ -858,6 +861,13 @@ begin
   end;
 end;
 
+{$ifndef FPC}
+function TmnBufferStream.WriteLineUTF8(const S: string): TFileSize;
+begin
+  Result := WriteLineUTF8(UTF8Encode(s));
+end;
+{$endif}
+
 function TmnBufferStream.WriteLine(const S: ansistring): TFileSize;
 begin
   Result := WriteLineAnsiString(S);
@@ -1364,7 +1374,9 @@ var
   begin
     if vBI >= aCount then
     begin
-      if (Read(b, 1)=1) then
+      vErr := Read(b, 1)<>1;
+
+      if not vErr then
       begin
         if aCount=ABufferSize then
         begin
@@ -1375,10 +1387,7 @@ var
         Inc(t, aCount);
         t^ := b;
         Inc(aCount);
-        vErr := False;
-      end
-      else
-        vErr := True;
+      end;
     end
     else
       vErr := False;
@@ -1789,8 +1798,6 @@ begin
   inherited Create;
   FStream := AStream;
 end;
-
-
 
 end.
 

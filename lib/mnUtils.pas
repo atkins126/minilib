@@ -254,6 +254,7 @@ function StringOf(const Value: Array of Byte; CodePage: Word = CP_UTF8): string;
 function StringOf(const Value: TBytes; CodePage: Word = CP_UTF8): string; overload;
 function StringOf(const Value: PByte; Size: Integer; CodePage: Word = CP_UTF8): string; overload;
 
+//TODO fix ansi to widestring
 function HexToBin(Text : PByte; Buffer: PByte; BufSize: longint): Integer; overload;
 procedure BinToHex(Buffer: PByte; Text: PByte; BufSize: longint); overload;
 function String2Hex(const vData: string): string; overload;
@@ -263,12 +264,11 @@ function Hex2String(const vData: string): string; overload;
 //Files Utils
 
 type
-  TEnumFilesOptions = set of (efDirectory, efFile);
+  TEnumFilesOptions = set of (efFile, efDirectory, efFullPath);
   //If set Resume to false it will stop loop
   TEnumFilesCallback = procedure(AObject: TObject; const FileName: string; Count, Level:Integer; IsDirectory: Boolean; var Resume: Boolean);
 
-procedure EnumFiles(FileList: TStringList; Folder, Filter: string; Options: TEnumFilesOptions; FullPath: Boolean = False); overload;
-procedure EnumFiles(FileList: TStringList; Folder, Filter: string; FullPath: Boolean = False); overload;
+procedure EnumFiles(FileList: TStringList; Folder, Filter: string; Options: TEnumFilesOptions = [efFile]); overload;
 function FirstFile(Path, Files: string): string;
 function DeleteFiles(Path, Files: string): Integer;
 function GetSizeOfFile(const vFile: string): Int64; //GetFileSize
@@ -939,19 +939,19 @@ begin
   end;
 end;
 
-procedure ArgumentsCallbackProc(Sender: Pointer; Index: Integer; Name, Value: string; IsSwitch: Boolean; var Resume: Boolean);
+procedure ArgumentsCallbackProc(Sender: Pointer; Index: Integer; AName, AValue: string; IsSwitch: Boolean; var Resume: Boolean);
 begin
   with TObject(Sender) as TStrings do
   begin
-    if (Name <> '') and (Value = '') then
+    if (AName <> '') and (AValue = '') then
     begin
       if IsSwitch then
-        Add(Name + NameValueSeparator)
+        Add(AName + NameValueSeparator)
       else
-        Add(NameValueSeparator + Name)
+        Add(NameValueSeparator + AName)
     end
     else
-      Add(Name + NameValueSeparator + Value);
+      Add(AName + NameValueSeparator + AValue);
   end;
 end;
 
@@ -1780,7 +1780,6 @@ begin
   BinToHex(vData, PByte(Result), vCount);
 end;
 
-
 const
   //H2BValidSet = ['0'..'9','A'..'F','a'..'f'];
   //H2BConvert: array['0'..'f'] of SmallInt = ( 0, 1, 2, 3, 4, 5, 6, 7, 8, 9,-1,-1,-1,-1,-1,-1,-1,10,11,12,13,14,15,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,10,11,12,13,14,15);
@@ -1852,7 +1851,7 @@ begin
     Result := -1;
 end;
 
-procedure EnumFiles(FileList: TStringList; Folder, Filter: string; Options: TEnumFilesOptions; FullPath: Boolean); overload;
+procedure EnumFiles(FileList: TStringList; Folder, Filter: string; Options: TEnumFilesOptions); overload;
 var
   R: integer;
   SearchRec: TSearchRec;
@@ -1865,7 +1864,7 @@ begin
       or ((efFile in Options) and ((SearchRec.Attr and faDirectory) <> faDirectory)))
       and ((SearchRec.Name <> '.') and (SearchRec.Name <> '..')) then
     begin
-      if FullPath then
+      if efFullPath in Options then
         FileList.Add(Folder + SearchRec.Name)
       else
         FileList.Add(SearchRec.Name);
@@ -1875,11 +1874,6 @@ begin
   FindClose(SearchRec);
 end;
 
-procedure EnumFiles(FileList: TStringList; Folder, Filter: string; FullPath: Boolean);
-begin
-  EnumFiles(FileList, Folder, Filter, [efDirectory, efFile], FullPath);
-end;
-
 function DeleteFiles(Path, Files: string): Integer;
 var
   FileList: TStringList;
@@ -1887,7 +1881,7 @@ var
 begin
   FileList := TStringList.Create;
   try
-    EnumFiles(FileList, Path, Files, [efFile], True);
+    EnumFiles(FileList, Path, Files, [efFile, efFullPath]);
     Result := FileList.Count;
     for f in FileList do
       DeleteFile(f);
@@ -1902,7 +1896,7 @@ var
 begin
   FileList := TStringList.Create;
   try
-    EnumFiles(FileList, Path, Files, [efFile], True);
+    EnumFiles(FileList, Path, Files, [efFile, efFullPath]);
     if FileList.Count > 0 then
       Result := FileList[0]
     else

@@ -171,8 +171,8 @@ type
     function ReceiveNotifications: TStrings; virtual;
     procedure Reconnect; virtual;
     procedure RecoverConnection; virtual;
-    procedure StartListen(const vChannel: string); virtual;
-    procedure StopListen(const vChannel: string); virtual;
+    procedure StartListen(const vChannel: string); virtual; deprecated;
+    procedure StopListen(const vChannel: string); virtual; deprecated;
     property Dispatchers: TDBDispatchers read FDispatchers;
     {$endif}
   end;
@@ -188,7 +188,8 @@ type
   public
     function CreateCommand(ASQL: string = ''): TmncSQLCommand;
     procedure ExecuteScript(AStrings: TStrings; AutoCommit: Boolean = False);
-    procedure Execute(const vSQL: string); virtual;
+    procedure Execute(const vSQL: string); overload; virtual;
+    procedure Execute(const vSQL: string; vArgs: array of const); overload;
     property Connection: TmncSQLConnection read GetConnection write SetConnection;
   end;
 
@@ -231,21 +232,15 @@ type
     FFetchBlob: Boolean;
     FParamPrefix: Char;
     FProcessSQL: Boolean;
-    FReady: Boolean; //BOF
-    FDone: Boolean; //EOF
     FProcessedSQL: TmncProcessedSQL;
     function GetTransaction: TmncSQLTransaction;
     procedure SetTransaction(AValue: TmncSQLTransaction);
     function GetSQL: TStrings;
     procedure SetParamPrefix(AValue: Char);
   protected
-    function GetDone: Boolean; override;
     function GetParseOptions: TmncParseSQLOptions; virtual;
     procedure DoParse; override;
     procedure ParseSQL(SQLOptions: TmncParseSQLOptions);
-    procedure Reset; override; //Clean and reset stamemnt like Done or Ready called in Execute before DoExecute and after Prepare
-    procedure HitDone;   //Make it FDone True
-    procedure HitUnready; //Make it FReady False
 
     function GetProcessedSQL: string;
     procedure DoRequestChanged(Sender: TObject); override;
@@ -260,7 +255,6 @@ type
     function GetLastRowID: Int64; virtual;
     function GetRowsChanged: Integer; virtual;
     property SQL: TStrings read GetSQL;//Alias of Request, autocomplete may add it in private becareful
-    property Ready: Boolean read FReady;
     property FetchBlobs: Boolean read FFetchBlob write FFetchBlob default false;
     //ParamPrefix is ? to use it to open param and match it before convert it to engine paramprefix
     property ParamPrefix: Char read FParamPrefix write SetParamPrefix default '?';
@@ -390,6 +384,11 @@ begin
   finally
     aCmd.Free;
   end;
+end;
+
+procedure TmncSQLTransaction.Execute(const vSQL: string; vArgs: array of const);
+begin
+  Execute(Format(vSQL, vArgs));
 end;
 
 procedure TmncSQLTransaction.ExecuteScript(AStrings: TStrings; AutoCommit: Boolean);
@@ -552,7 +551,7 @@ end;
 
 function TmncSQLConnection.EnumDatabases: TStrings;
 begin
-
+  Result := nil;
 end;
 
 procedure TmncSQLConnection.Execute(const vSQL: string; vArgs: array of const);
@@ -599,11 +598,6 @@ begin
   inherited Transaction := AValue;
 end;
 
-function TmncSQLCommand.GetDone: Boolean;
-begin
-  Result := FDone;
-end;
-
 function TmncSQLCommand.GetParseOptions: TmncParseSQLOptions;
 begin
   Result := [];
@@ -621,23 +615,6 @@ begin
   if ProcessedSQL <> nil then { TODO : need discuss }
     ProcessedSQL.Clear;
 
-end;
-
-procedure TmncSQLCommand.Reset;
-begin
-  inherited;
-  FReady := True;
-  FDone := False;
-end;
-
-procedure TmncSQLCommand.HitDone;
-begin
-  FDone := True;
-end;
-
-procedure TmncSQLCommand.HitUnready;
-begin
-  FReady := False;
 end;
 
 procedure TmncSQLCommand.ParseSQL(SQLOptions: TmncParseSQLOptions);
@@ -668,6 +645,8 @@ begin
   FProcessSQL := True;
   FFetchBlob := False;
   FParamPrefix := '?';
+
+  Reset;
 end;
 
 function TmncSQLCommand.CreateProcessedSQL: TmncProcessedSQL;

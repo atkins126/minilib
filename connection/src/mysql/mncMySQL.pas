@@ -212,7 +212,6 @@ type
     procedure DoExecute; override;
     procedure DoNext; override;
     procedure DoUnPrepare; override;
-    function GetDone: Boolean; override;
     function GetActive:Boolean; override;
     procedure DoClose; override;
     function CreateFields(vColumns: TmncColumns): TmncFields; override;
@@ -821,11 +820,6 @@ begin
   inherited;
 end;
 
-function TmncMySQLCommand.GetDone: Boolean;
-begin
-  Result := (FStatment = nil) or inherited GetDone;
-end;
-
 function TmncMySQLCommand.GetRowsChanged: Integer;
 begin
   CheckActive;
@@ -971,7 +965,7 @@ begin
 
     for i := 0 to Binds.Count - 1 do
     begin
-      if Binds[i].Param.IsEmpty then
+      if Binds[i].Param.IsNull then
       begin
         Binds[i].is_null := 1;
       end
@@ -1011,8 +1005,13 @@ begin
           else //String type
           begin
             s := VarToStrDef(Binds[i].Param.Value, '');
-            Binds[i].CopyBuffer(PAnsiChar(s)^, Length(s));
-            Binds[i].len := Length(s);
+            if s = '' then
+              Binds[i].is_null := 1
+            else
+            begin
+              Binds[i].CopyBuffer(PAnsiChar(s)^, Length(s));
+              Binds[i].len := Length(s);
+            end;
           end;
         end;
       end;

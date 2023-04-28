@@ -208,7 +208,6 @@ type
 
     FValue: string;
     FIsNull: Boolean;
-    FIsEmpty: Boolean;
     function GetData: string;
   protected
     function GetValue: Variant; override;
@@ -226,8 +225,6 @@ type
     function GetAsDateTime: TDateTime; override;
     function GetAsTime: TDateTime; override;
     function GetIsNull: Boolean; override;
-    function GetIsEmpty: Boolean; override;
-
 
     procedure SetAsText(const AValue: string); override;
     procedure SetAsString(const AValue: string); override;
@@ -359,7 +356,6 @@ type
     procedure DoPrepare; override;
     procedure DoExecute; override;
     procedure DoNext; override;
-    function GetDone: Boolean; override;
     function GetActive: Boolean; override;
     procedure DoClose; override;
     procedure ClearStatement; virtual;
@@ -389,7 +385,7 @@ type
     procedure DoPrepare; override;
     procedure DoExecute; override;
     procedure DoNext; override;
-    function GetDone: Boolean; override;
+    function GetDone: Boolean;
     function GetActive: Boolean; override;
     procedure DoClose; override;
     function FetchSQL: UTF8String;
@@ -1049,11 +1045,6 @@ begin
   //Connection.Execute();
 end;
 
-function TmncPGCommand.GetDone: Boolean;
-begin
-  Result := (FStatement = nil) or FEOF;
-end;
-
 function TmncPGCommand.GetLastInsertID: Int64;
 begin
   Result := 0;
@@ -1368,11 +1359,6 @@ begin
   end
   else
     Result := FValue;
-end;
-
-function TmncPostgreField.GetIsEmpty: Boolean;
-begin
-  Result := FIsEmpty;
 end;
 
 function TmncPostgreField.GetIsNull: Boolean;
@@ -1820,13 +1806,11 @@ begin
         f.FDataLen := PQgetlength(vRes, vTuple, i);
         //f.FDataLen := NullPos(f.FData)-1;
         //f.FDataLen := 0;
-        f.FIsEmpty := f.FDataLen = 0;
         f.FIsNull := False;
       end
       else
       begin
         f.FIsNull := True;
-        f.FIsEmpty := True;
       end;
     end;
   end;

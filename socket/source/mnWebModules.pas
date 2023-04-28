@@ -39,7 +39,7 @@ headers[2]
 interface
 
 uses
-  SysUtils, Classes, syncobjs, StrUtils,
+  SysUtils, Classes, syncobjs, StrUtils, //NetEncoding, Hash,
   mnUtils, mnSockets, mnServers, mnStreams, mnStreamUtils,
   mnFields, mnParams,
   mnModules;
@@ -47,6 +47,19 @@ uses
 type
 
   TmodWebModule = class;
+  THttpResult = (
+    hrNone,
+    hrOK,
+    hrError,
+    hrMovedTemporarily, //307
+    hrFound, //302
+    hrNotFound,
+    hrSwitchingProtocols
+  );
+
+  THttpResultHelper = record helper for THttpResult
+    function ToString: string;
+  end;
 
   { TmodHttpRespond }
 
@@ -60,12 +73,16 @@ type
     FCookies: TmnParams;
     FRoot: string; //Document root folder
     FHost: string;
+    FHttpResult: THttpResult;
     procedure SetCompressClass(AValue: TmnCompressStreamProxyClass);
     procedure SetsCompressProxy(AValue: TmnCompressStreamProxy);
+  protected
+    function HeadText: string; override;
+    procedure DoSendHeader; override;
+    procedure DoHeaderSent; override;
   public
     constructor Create;
     destructor Destroy; override;
-    procedure SendHeader; override;
     property Cookies: TmnParams read FCookies;
     property URIParams: TmnParams read FURIParams;
     property KeepAlive: Boolean read FKeepAlive write FKeepAlive;
@@ -73,6 +90,7 @@ type
     property ContentLength: Integer read FContentLength write FContentLength;
     property CompressClass: TmnCompressStreamProxyClass read FCompressClass write SetCompressClass;
     property CompressProxy: TmnCompressStreamProxy read FCompressProxy write SetsCompressProxy;
+    property HttpResult: THttpResult read FHttpResult write FHttpResult;
     //Document root folder
     property Root: string read FRoot;
     property Host: string read FHost;
@@ -126,6 +144,10 @@ type
     procedure DoCreateCommands; override;
 
     procedure Log(S: string); override;
+    procedure InternalError(ARequest: TmodRequest; ARequestStream: TmnBufferStream; ARespondStream: TmnBufferStream; var Handled: Boolean); override;
+    procedure ParseHead(ARequest: TmodRequest); override;
+
+
   public
     destructor Destroy; override;
     property DocumentRoot: string read FDocumentRoot write SetDocumentRoot;
@@ -216,6 +238,16 @@ implementation
 //TODO slow function needs to improvements
 //https://stackoverflow.com/questions/1549213/whats-the-correct-encoding-of-http-get-request-strings
 
+{
+function HashWebSocketKey(const key: string): string;
+var
+  b: TBytes;
+begin
+  b := THashSHA1.GetHashBytes(Key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11');
+  Result := TNetEncoding.Base64String.EncodeBytesToString(b);
+end;
+}
+
 function URIDecode(const S: AnsiString; CodePage: Word = CP_UTF8): string;
 var
   c: AnsiChar;
@@ -269,6 +301,7 @@ begin
   inherited Create;
   FCookies := TmnParams.Create;
   FURIParams := TmnParams.Create;
+  FHttpResult := hrNone;
 end;
 
 destructor TmodHttpRespond.Destroy;
@@ -278,12 +311,9 @@ begin
   inherited Destroy;
 end;
 
-procedure TmodHttpRespond.SendHeader;
+procedure TmodHttpRespond.DoHeaderSent;
 begin
-  if Cookies.Count > 0 then
-    PostHeader('Cookies', Cookies.AsString);
-
-  inherited; //*<----------
+  inherited;
 
   if CompressClass <> nil then
   begin
@@ -297,17 +327,40 @@ begin
   end;
 end;
 
+procedure TmodHttpRespond.DoSendHeader;
+begin
+  inherited;
+  if Cookies.Count > 0 then
+    AddHeader('Cookies', Cookies.AsString);
+end;
+
+function TmodHttpRespond.HeadText: string;
+begin
+  Result := HttpResult.ToString;
+end;
+
 { TmodHttpPostCommand }
 
 procedure TmodHttpPostCommand.RespondResult(var Result: TmodRespondResult);
 begin
-  if SameText(Request.Method, 'POST') and (Request.Header['Content-Type'].Have('application/json')) then
+  if SameText(Request.Method, 'POST') then
   begin
-    Contents := TMemoryStream.Create;
-    if Request.Stream <> nil then
-      Request.Stream.ReadStream(Contents, Respond.ContentLength);
-    Contents.Position := 0; //it is memory btw
-    //Contents.SaveToFile('d:\temp\json.json');
+    if (Request.Header['Content-Type'].Have('application/json')) then
+    begin
+      Contents := TMemoryStream.Create;
+      if Request.Stream <> nil then
+        Request.Stream.ReadStream(Contents, Request.ContentLength);
+      Contents.Position := 0; //it is memory btw
+      //Contents.SaveToFile('d:\temp\json.json');
+    end
+    else
+    begin
+      Contents := TMemoryStream.Create;
+      if Request.Stream <> nil then
+        Request.Stream.ReadStream(Contents, Request.ContentLength);
+      Contents.Position := 0; //it is memory btw
+      Contents.SaveToFile('c:\temp\1.txt');
+    end;
   end;
   inherited;
 end;
@@ -342,7 +395,8 @@ end;
 procedure TmodWebModule.DoCreateCommands;
 begin
   inherited;
-  RegisterCommand('GET', TmodHttpGetCommand, true);
+  //RegisterCommand('GET', TmodHttpGetCommand, true);
+  RegisterCommand('GET', TmodHttpPostCommand, true);
   RegisterCommand('POST', TmodHttpPostCommand, true);
   RegisterCommand('Info', TmodServerInfoCommand);
   {
@@ -351,6 +405,14 @@ begin
   RegisterCommand('DIR', TmodDirCommand);
   RegisterCommand('DEL', TmodDeleteFileCommand);
   }
+end;
+
+procedure TmodWebModule.InternalError(ARequest: TmodRequest; ARequestStream, ARespondStream: TmnBufferStream; var Handled: Boolean);
+begin
+  inherited;
+  ARespondStream.WriteLineUTF8('HTTP/1.1 500 Internal Server Error');
+  ARespondStream.WriteLineUTF8('');
+  Handled := True;
 end;
 
 destructor TmodWebModule.Destroy;
@@ -365,14 +427,20 @@ begin
   Modules.Log(S);
 end;
 
+procedure TmodWebModule.ParseHead(ARequest: TmodRequest);
+begin
+  inherited;
+  ARequest.Command := ARequest.Method;
+end;
+
 { TmodURICommand }
 
 procedure TmodURICommand.RespondNotFound;
 var
   Body: string;
 begin
-  Respond.SendRespond('HTTP/1.1 200 OK');
-  Respond.PostHeader('Content-Type', 'text/html');
+  Respond.HttpResult := hrOK;
+  Respond.AddHeader('Content-Type', 'text/html');
   Respond.SendHeader;
   Body := '<HTML><HEAD><TITLE>404 Not Found</TITLE></HEAD>' +
     '<BODY><H1>404 Not Found</H1>The requested URL ' +
@@ -447,7 +515,7 @@ begin
   else if Ext = 'json' then
     Result := 'application/json'
   else if Ext = 'js' then
-    Result := 'text/js'
+    Result := 'text/javascript'
   else
     Result := 'application/binary';
 end;
@@ -485,12 +553,13 @@ begin
         else}
           aDocSize := aDocStream.Size;
 
+        Respond.HttpResult := hrOK;
+
         if Active then
         begin
-          Respond.SendRespond('HTTP/1.1 200 OK');
-          Respond.PostHeader('Content-Type', DocumentToContentType(vDocument));
+          Respond.AddHeader('Content-Type', DocumentToContentType(vDocument));
           if Respond.KeepAlive then
-            Respond.PostHeader('Content-Length', IntToStr(aDocSize));
+            Respond.AddHeader('Content-Length', IntToStr(aDocSize));
         end;
 
         Respond.SendHeader;
@@ -533,11 +602,11 @@ begin
   begin
     //https://developer.mozilla.org/en-US/docs/Web/HTTP/Redirections
     Request.Address := IncludeURLDelimiter(Request.Address);
-    //Respond.SendRespond('HTTP/1.1 301 Moved Permanently');
-    Respond.SendRespond('HTTP/1.1 302 Found');
-    //Respond.SendRespond('HTTP/1.1 307 Temporary Redirect');
+    //Respond.SendHead('HTTP/1.1 301 Moved Permanently');
+    Respond.HttpResult := hrFound;
+    //Respond.SendHead('HTTP/1.1 307 Temporary Redirect');
 
-    Respond.PostHeader('Location', Request.CollectURI);
+    Respond.AddHeader('Location', Request.CollectURI);
     Respond.SendHeader;
   end
   else
@@ -553,7 +622,8 @@ end;
 procedure TmodServerInfoCommand.RespondResult(var Result: TmodRespondResult);
 begin
   inherited;
-  Respond.SendRespond('OK');
+  Respond.HttpResult := hrOK;
+  Respond.SendHeader;
   //Respond.Stream.WriteLine('Server is running on port: ' + Module.Server.Port);
   Respond.Stream.WriteLine('the server is: "' + ParamStr(0) + '"');
 end;
@@ -570,7 +640,7 @@ begin
   aFileName := Respond.URIParams.Values['FileName'];
   aFile := TFileStream.Create(Respond.Root + aFileName, fmCreate);
   try
-    Respond.Stream.ReadStream(aFile, Respond.ContentLength);
+    Respond.Stream.ReadStream(aFile, Request.ContentLength);
   finally
     aFile.Free;
   end;
@@ -655,15 +725,25 @@ begin
 end;
 
 procedure TmodHttpCommand.Prepare(var Result: TmodRespondResult);
+var
+  Key: string;
 begin
   inherited;
-  ParseParams(Request.Params, Respond.URIParams);
+  ParseParams(Request.Query, Respond.URIParams);
+
+  //* https://developer.mozilla.org/en-US/docs/Web/API/WebSockets_API/Writing_WebSocket_servers
+  Key := Request.Header.ReadString('Sec-WebSocket-Key');
+  if Key <> '' then
+  begin
+    //Key := HashWebSocketKey(Key);
+    //Respond.AddHeader('Sec-WebSocket-Accept', Key);
+  end;
 
   if Module.UseKeepAlive and SameText(Request.Header.ReadString('Connection'), 'Keep-Alive') then
   begin
     Respond.KeepAlive := True;
-    Respond.PostHeader('Connection', 'Keep-Alive');
-    Respond.PostHeader('Keep-Alive', 'timout=' + IntToStr(Module.KeepAliveTimeOut div 5000) + ', max=100');
+    Respond.AddHeader('Connection', 'Keep-Alive');
+    Respond.AddHeader('Keep-Alive', 'timout=' + IntToStr(Module.KeepAliveTimeOut div 5000) + ', max=100');
   end;
 
   if Module.UseCompressing then
@@ -675,11 +755,11 @@ begin
     else
       Respond.CompressClass := nil;
     if Respond.CompressClass <> nil then
-      Respond.PostHeader('Content-Encoding', Respond.CompressClass.GetCompressName);
+      Respond.AddHeader('Content-Encoding', Respond.CompressClass.GetCompressName);
   end;
 
   if (Request.Header['Content-Length'].IsExists) then
-    Respond.ContentLength := Request.Header['Content-Length'].AsInteger;
+    Request.ContentLength := Request.Header['Content-Length'].AsInteger;
 end;
 
 procedure TmodHttpCommand.Unprepare(var Result: TmodRespondResult);
@@ -733,6 +813,21 @@ begin
   ARequest.URI := URIDecode(ARequest.URI);
   //ARequest.ParsePath(ARequest.URI); duplicate in parse head :)
   ARequest.Command := ARequest.Method;
+end;
+
+{ THttpResultHelper }
+
+function THttpResultHelper.ToString: string;
+begin
+  Result := 'HTTP/1.1 ';
+  case Self of
+    hrOK: Result := Result + '200 OK';
+    hrError: Result := Result + '500 Internal Server Error';
+    hrNotFound: Result := Result + '404 NotFound';
+    hrMovedTemporarily: Result := Result + '307 Temporary Redirect';
+    hrFound: Result := Result + '302 Found';
+    hrSwitchingProtocols: Result := Result + '101 Switching Protocols';
+  end;
 end;
 
 initialization
