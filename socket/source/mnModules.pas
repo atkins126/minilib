@@ -59,10 +59,27 @@ type
   { TmnHeader }
 
   TmnHeader = class(TmnParams)
+  private
+    function GetValues(const vName: string): string;
+    procedure SetValues(const vName, Value: string);
   protected
     function CreateField: TmnField; override;
   public
     constructor Create;
+    procedure ReadHeader(Stream: TmnBufferStream);
+    property Values[const vName: string]: string read GetValues write SetValues; default;
+  end;
+
+  TmodCommunicate = class abstract(TmnObject)
+  private
+    FHeader: TmnHeader;
+    FStream: TmnBufferStream;
+    procedure SetHeader(const AValue: TmnHeader);
+  public
+    constructor Create;
+    destructor Destroy; override;
+    property Stream: TmnBufferStream read FStream write FStream;
+    property Header: TmnHeader read FHeader;
   end;
 
   TmodRequestInfo = record
@@ -83,22 +100,18 @@ type
 
   { TmodRequest }
 
-  TmodRequest = class(TObject)
+  TmodRequest = class(TmodCommunicate)
   private
-    FHeader: TmnHeader;
-    FStream: TmnBufferStream;
     FContentLength: Integer;
     FParams: TmnFields;
     FRoute: TStrings;
     FPath: String;
-    procedure SetRequestHeader(AValue: TmnHeader);
   protected
     Info: TmodRequestInfo;
   public
     constructor Create;
     destructor Destroy; override;
     procedure  Clear;
-    property Stream: TmnBufferStream read FStream;
     property Raw: String read Info.Raw write Info.Raw;
 
     //from raw
@@ -116,7 +129,6 @@ type
     property Params: TmnFields read FParams;
 
     property ContentLength: Integer read FContentLength write FContentLength;
-    property Header: TmnHeader read FHeader write SetRequestHeader;
     function CollectURI: string;
   end;
 
@@ -141,16 +153,16 @@ type
     resEnd
     );
 
+  TmodKeepAlive = (klvUndefined, klvClose, klvKeepAlive);
+
   TmodRespondStates = set of TmodRespondState;
 
   { TmodRespond }
 
-  TmodRespond = class(TObject)
+  TmodRespond = class(TmodCommunicate)
   private
     FStates: TmodRespondStates;
-    FHeader: TmnHeader;
     //FRespondResult: TmodRespondResult;
-    FStream: TmnBufferStream;
   protected
     function HeadText: string; virtual;
     procedure DoSendHeader; virtual;
@@ -159,8 +171,6 @@ type
   public
     constructor Create;
     destructor Destroy; override;
-    property Header: TmnHeader read FHeader;
-    property Stream: TmnBufferStream read FStream write FStream;
     property States: TmodRespondStates read FStates;
     //property RespondResult: TmodRespondResult read FRespondResult;
 
@@ -252,7 +262,7 @@ type
     FModules: TmodModules;
     FParams: TStringList;
     FProtocols: TArray<String>;
-    FUseKeepAlive: Boolean;
+    FUseKeepAlive: TmodKeepAlive;
     FUseCompressing: Boolean;
     procedure SetAliasName(AValue: String);
   protected
@@ -270,7 +280,7 @@ type
     function CreateCommand(CommandName: String; ARequest: TmodRequest; ARequestStream: TmnBufferStream = nil; ARespondStream: TmnBufferStream = nil): TmodCommand; overload;
     function Match(const ARequest: TmodRequest): Boolean; virtual;
 
-    procedure ParseHeader(RequestHeader: TmnParams; Stream: TmnBufferStream); virtual;
+    procedure ReadHeader(AHeader: TmnHeader; Stream: TmnBufferStream); virtual;
     procedure ParseHead(ARequest: TmodRequest); virtual;
     function RequestCommand(ARequest: TmodRequest; ARequestStream, ARespondStream: TmnBufferStream): TmodCommand; virtual;
     procedure Log(S: String); virtual;
@@ -292,7 +302,7 @@ type
     property Modules: TmodModules read FModules;
     property Protocols: TArray<String> read FProtocols;
     property KeepAliveTimeOut: Integer read FKeepAliveTimeOut write FKeepAliveTimeOut;
-    property UseKeepAlive: Boolean read FUseKeepAlive write FUseKeepAlive default False;
+    property UseKeepAlive: TmodKeepAlive read FUseKeepAlive write FUseKeepAlive default klvUndefined;
     property UseCompressing: Boolean read FUseCompressing write FUseCompressing;
     property AliasName: String read FAliasName write SetAliasName;
   end;
@@ -514,12 +524,12 @@ end;
 constructor TmodRespond.Create;
 begin
   inherited;
-  FHeader := TmnHeader.Create;
+
 end;
 
 destructor TmodRespond.Destroy;
 begin
-  FreeAndNil(FHeader);
+
   inherited;
 end;
 
@@ -599,15 +609,6 @@ end;
 
 { TmodRequest }
 
-procedure TmodRequest.SetRequestHeader(AValue: TmnHeader);
-begin
-  if FHeader <> AValue then
-  begin
-    FreeAndNil(FHeader);
-    FHeader := AValue;
-  end;
-end;
-
 function TmodRequest.CollectURI: string;
 begin
   Result := URLPathDelim + Address;
@@ -618,14 +619,12 @@ end;
 constructor TmodRequest.Create;
 begin
   inherited Create;
-  FHeader := TmnHeader.Create;
   FRoute := TStringList.Create;
   FParams := TmnFields.Create;
 end;
 
 destructor TmodRequest.Destroy;
 begin
-  FreeAndNil(FHeader);
   FreeAndNil(FRoute);
   FreeAndNil(FParams);
   inherited Destroy;
@@ -654,6 +653,35 @@ end;
 function TmnHeader.CreateField: TmnField;
 begin
   Result := TmnHeaderField.Create;
+end;
+
+function TmnHeader.GetValues(const vName: string): string;
+begin
+  Result := Field[vName].AsString;
+end;
+
+procedure TmnHeader.ReadHeader(Stream: TmnBufferStream);
+var
+  line: String;
+begin
+  if Stream <> nil then
+  begin
+    while not (cloRead in Stream.Done) do
+    begin
+      line := UTF8ToString(Stream.ReadLineUTF8);
+      if line = '' then
+        break
+      else
+      begin
+        AddItem(line, ':', True);
+      end;
+    end;
+  end;
+end;
+
+procedure TmnHeader.SetValues(const vName, Value: string);
+begin
+  SetValue(vName, Value);
 end;
 
 { TmodModuleListener }
@@ -815,7 +843,7 @@ begin
   FRequest := ARequest; //do not free
 
   FRespond := CreateRespond;
-  FRespond.Stream := RequestStream;
+  FRespond.FStream := RequestStream;
 end;
 
 destructor TmodCommand.Destroy;
@@ -921,22 +949,11 @@ begin
 
 end;
 
-procedure TmodModule.ParseHeader(RequestHeader: TmnParams; Stream: TmnBufferStream);
-var
-  line: String;
+procedure TmodModule.ReadHeader(AHeader: TmnHeader; Stream: TmnBufferStream);
 begin
   if Stream <> nil then
   begin
-    while not (cloRead in Stream.Done) do
-    begin
-      line := UTF8ToString(Stream.ReadLineUTF8);
-      if line = '' then
-        break
-      else
-      begin
-        RequestHeader.AddItem(line, ':', True);
-      end;
-    end;
+    AHeader.ReadHeader(Stream);
   end;
 end;
 
@@ -1040,7 +1057,7 @@ begin
 
 
   ParseHead(ARequest);
-  ParseHeader(ARequest.Header, ARequestStream);
+  ReadHeader(ARequest.Header, ARequestStream);
 
   aCmd := RequestCommand(ARequest, ARequestStream, ARespondStream);
 
@@ -1257,6 +1274,29 @@ begin
     finally
       SubValues.Free;
     end;
+  end;
+end;
+
+{ TmodCommunicate }
+
+constructor TmodCommunicate.Create;
+begin
+  inherited Create;
+  FHeader := TmnHeader.Create;
+end;
+
+destructor TmodCommunicate.Destroy;
+begin
+  FreeAndNil(FHeader);
+  inherited;
+end;
+
+procedure TmodCommunicate.SetHeader(const AValue: TmnHeader);
+begin
+  if FHeader <> AValue then
+  begin
+    FreeAndNil(FHeader);
+    FHeader := AValue;
   end;
 end;
 

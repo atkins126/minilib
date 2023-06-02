@@ -221,8 +221,8 @@ type
 
     procedure Close(ACloseWhat: TmnStreamClose = [cloRead, cloWrite]);
 
+    //* ABuffer is created you need to free it
     function ReadBufferUntil(const Match: PByte; MatchSize: Word; ExcludeMatch: Boolean; out ABuffer: PByte; out ABufferSize: TFileSize; out Matched: Boolean): Boolean;
-    function ReadBufferUntil22(const Match: PByte; MatchSize: Word; ExcludeMatch: Boolean; out ABuffer: PByte; out ABufferSize: TFileSize; out Matched: Boolean): Boolean;
     {$ifndef NEXTGEN}
     function ReadUntil(const Match: ansistring; ExcludeMatch: Boolean; out Buffer: ansistring; out Matched: Boolean): Boolean; overload;
     function ReadUntil(const Match: widestring; ExcludeMatch: Boolean; out Buffer: widestring; out Matched: Boolean): Boolean; overload;
@@ -754,6 +754,9 @@ var
 begin
   Result := 0;
   RealCount := 0;
+  if Count=0 then
+    Exit;
+
   aSize := Count;
   {$ifdef FPC} //less hint in fpc
   aBuffer := nil;
@@ -1300,68 +1303,6 @@ begin
   Result := FReadBuffer.Read(Buffer, Count);
 end;
 
-function TmnBufferStream.ReadBufferUntil22(const Match: PByte; MatchSize: Word; ExcludeMatch: Boolean; out ABuffer: PByte; out ABufferSize: TFileSize; out Matched: Boolean): Boolean;
-
-  function CheckReadBuffer: Boolean;
-  begin
-    if FReadBuffer.Buffer = nil then
-      FReadBuffer.CreateBuffer;
-    if not (FReadBuffer.Pos < FReadBuffer.Stop) then
-      FReadBuffer.LoadBuffer;
-    Result := (FReadBuffer.Pos < FReadBuffer.Stop);
-  end;
-
-var
-  P: PByte;
-  mt: PByte;
-  c, l: TFileSize;
-  t: PByte;
-begin
-  if (Match = nil) or (MatchSize = 0) then
-    raise Exception.Create('Match is empty!');
-  Result := not (cloRead in Done);
-  Matched := False;
-  mt := Match;
-  ABuffer := nil;
-  ABufferSize := 0;
-  c := 1;//TODO use start from 0
-  while not Matched and CheckReadBuffer do
-  begin
-    P := FReadBuffer.Pos;
-    while P < FReadBuffer.Stop do
-    begin
-      if mt^ = P^ then
-      begin
-        Inc(c);
-        Inc(mt);
-      end
-      else
-        mt := Match;
-      Inc(P);
-      if c > MatchSize then
-      begin
-        Matched := True;
-        break;
-      end;
-    end;
-
-    //Append to memory
-    l := P - FReadBuffer.Pos;
-    if ExcludeMatch and Matched then
-      l := l - MatchSize;
-
-    ReAllocMem(ABuffer, ABufferSize + l);
-    t := ABuffer;
-    Inc(t, ABufferSize);
-    Move(FReadBuffer.Pos^, t^, l);
-    ABufferSize := ABufferSize + l;
-
-    FReadBuffer.Pos := PByte(P);
-  end;
-  if not Matched and (cloRead in Done) and (ABufferSize = 0) then
-    Result := False;
-end;
-
 function TmnBufferStream.ReadBufferUntil(const Match: PByte; MatchSize: Word; ExcludeMatch: Boolean; out ABuffer: PByte; out ABufferSize: TFileSize; out Matched: Boolean): Boolean;
 var
   aCount: Integer;
@@ -1425,7 +1366,6 @@ begin
       if MatchIndex = MatchSize then
       begin
         Matched := True;
-
       end;
     end
     else

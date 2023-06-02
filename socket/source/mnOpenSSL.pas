@@ -23,6 +23,8 @@ type
   EmnOpenSSLException = Exception;
   { TOpenSSLObject }
 
+  TsslError = (seSuccess, seTimeout, seClosed, seInvalid);
+
   TOpenSSLObject = class abstract(TObject)
   public
     constructor Create;
@@ -45,7 +47,11 @@ type
   TTLS_SSLMethod = class(TSSLMethod)
   protected
     procedure CreateHandle; override;
-  public
+  end;
+
+  TTLS_SSLClientMethod = class(TSSLMethod)
+  protected
+    procedure CreateHandle; override;
   end;
 
   { TTLS_SSLServerMethod }
@@ -53,7 +59,6 @@ type
   TTLS_SSLServerMethod = class(TSSLMethod)
   protected
     procedure CreateHandle; override;
-  public
   end;
 
   { TCTX }
@@ -94,7 +99,7 @@ type
     function Handshake: Boolean;
     procedure SetVerifyNone;
     //Return False if failed
-    function Read(var Buf; Size: Integer; out ReadSize: Integer): Boolean;
+    function Read(var Buf; Size: Integer; out ReadSize: Integer): TsslError;
     function Write(const Buf; Size: Integer; out WriteSize: Integer): Boolean;
     function Pending: Boolean;
   end;
@@ -154,6 +159,20 @@ implementation
 
 uses
   mnSockets;
+
+procedure debug_callback(const ssl: PSSL; where: cint; ret: cint); cdecl;
+begin
+  case where of
+    SSL_CB_ALERT: Log.writeln('SSL alert: '+ SSL_alert_type_string_long(ret)+ ':'+ SSL_alert_desc_string_long(ret)+ ':'+ SSL_state_string(ssl));
+    SSL_CB_LOOP: Log.writeln('SSL state: '+ SSL_state_string(ssl)+ ':'+ SSL_state_string_long(ssl));
+    SSL_CB_HANDSHAKE_START: Log.writeln('SSL handshake started: '+ SSL_state_string(ssl));
+    SSL_CB_HANDSHAKE_DONE: Log.writeln('SSL handshake completed: '+ SSL_state_string(ssl));
+    else
+      Log.writeln('SSL alert: '+ SSL_alert_type_string_long(ret)+ ':'+ SSL_alert_desc_string_long(ret)+ ':'+ SSL_state_string(ssl));
+      //Log.writeln('where %d ret %d state:', [where, ret]);
+  end;
+end;
+
 
 function BioBase64Encode(vBuf: PByte; vLen: Integer): UTF8String;
 var
@@ -410,7 +429,7 @@ begin
     if CryptoLib.Load=lsInit then
     begin
       if All then
-        OPENSSL_init_crypto(OPENSSL_INIT_ADD_ALL_CIPHERS or OPENSSL_INIT_ADD_ALL_DIGESTS, nil)
+        OpenSSL_add_all_algorithms
       else
         OPENSSL_init_crypto(0, nil);
     end;
@@ -514,9 +533,11 @@ begin
   Initialize(Self);
   {$endif}
   CTX := ACTX;
+  //SSL_CTX_set_max_proto_version(ctx, TLS1_3_VERSION);
+
   Handle := SSL_new(CTX.Handle);
   {$ifdef DEBUG}
-  Log.WriteLn(SSL_get_version(Handle));
+  //Log.WriteLn(SSL_get_version(Handle));
   {$endif}
   Active := True;
 end;
@@ -556,17 +577,21 @@ end;
 function TSSL.Connect: Boolean;
 var
   ret: Integer;
+  s: string;
 begin
   ret := SSL_connect(Handle);
   if ret < 0  then
   begin
     Result := False;
-    Log.WriteLn('Connect: ' + ERR_error_string(ERR_get_error(), nil));
+    s := ERR_error_string(ERR_get_error(), nil);
+    Log.WriteLn('Connect: ' + s);
   end
   else if ret = 0 then //error
     Result := False
   else
     Result := True;
+  Log.WriteLn('version: ' + SSL_get_version(Handle));
+
 end;
 
 function TSSL.Handshake: Boolean;
@@ -589,9 +614,9 @@ begin
   SSL_set_verify(Handle, SSL_VERIFY_NONE, nil);
 end;
 
-function TSSL.Read(var Buf; Size: Integer; out ReadSize: Integer): Boolean;
+function TSSL.Read(var Buf; Size: Integer; out ReadSize: Integer): TsslError;
 var
-  err: Integer;
+  err, errno: Integer;
 begin
   if not Active then
     raise EmnOpenSSLException.Create('SSL object is not Active');
@@ -599,21 +624,32 @@ begin
   ReadSize := SSL_read(Handle, Buf, Size);
   if ReadSize <= 0  then
   begin
+    errno := WallSocket.GetSocketError(FSocket);
     err := SSL_get_error(Handle, ReadSize);
-    Log.WriteLn('Read: ' + ERR_error_string(err, nil));
+
     {
       Here we have a problem some are not real error, Disconnected gracefully, or read time out
     }
-    if err = 5 then
+    if err = SSL_ERROR_ZERO_RETURN then
+      Result := seClosed
+    else if err = SSL_ERROR_SYSCALL then
     begin
-      err := WallSocket.GetSocketError(FSocket);
-      Log.WriteLn('Read: Socket Error: ' + IntToStr(err));
+      Log.WriteLn('Read: ' + ERR_error_string(err, nil));
+      Log.WriteLn('Read: Socket Error: ' + IntToStr(errno));
+      Result := seInvalid;
+      //check time out
+    end
+    else
+    begin
+      Log.WriteLn('Read: ' + ERR_error_string(err, nil));
+      Log.WriteLn('Read: Socket Error: ' + IntToStr(errno));
+      Result := seInvalid;
     end;
+
     ReadSize := 0;
-    Result := False;
   end
   else
-    Result := True;
+    Result := seSuccess;
 end;
 
 function TSSL.Write(const Buf; Size: Integer; out WriteSize: Integer): Boolean;
@@ -666,10 +702,20 @@ begin
   Handle := SSL_CTX_new(AMethod.Handle);
   if Handle = nil then
     EmnOpenSSLException.Create('Can not create CTX handle');
-  o := SSL_OP_NO_SSLv2 or SSL_OP_NO_SSLv3;
+
+  //o := SSL_OP_ALL or SSL_OP_NO_SSLv2 or SSL_OP_NO_SSLv3 or SSL_OP_SINGLE_DH_USE or SSL_OP_SINGLE_ECDH_USE or SSL_OP_CIPHER_SERVER_PREFERENCE;
+  o := SSL_OP_ALL or SSL_OP_SINGLE_DH_USE;
+
   if coNoComppressing in Options then
     o := o or SSL_OP_NO_COMPRESSION;
+
   SSL_CTX_set_options(Handle, o);
+  SSL_CTX_set_min_proto_version(Handle, TLS1_3_VERSION);
+  SSL_CTX_set_max_proto_version(Handle, TLS1_3_VERSION);
+  {$ifopt D+}
+  SSL_CTX_set_info_callback(Handle, debug_callback);
+  {$endif}
+  //var i := SSL_CTX_load_verify_locations(Handle, 'D:\Users\Belal\Downloads\cloudflaressl.com.crt', nil);
 end;
 
 constructor TContext.Create(AMethodClass: TSSLMethodClass);
@@ -694,8 +740,11 @@ begin
 end;
 
 procedure TContext.LoadPrivateKeyFile(FileName: utf8string);
+var
+  i: Integer;
 begin
-  if SSL_CTX_use_PrivateKey_file(Handle, PUTF8Char(FileName), SSL_FILETYPE_PEM) <= 0 then
+  i := SSL_CTX_use_PrivateKey_file(Handle, PUTF8Char(FileName), SSL_FILETYPE_PEM);
+  if i <= 0 then
     raise EmnOpenSSLException.Create('fail to load private key');
 end;
 
@@ -708,6 +757,13 @@ end;
 procedure TContext.SetVerifyNone;
 begin
   SSL_CTX_set_verify(Handle, SSL_VERIFY_PEER, nil);
+end;
+
+{ TTLS_SSLClientMethod }
+
+procedure TTLS_SSLClientMethod.CreateHandle;
+begin
+  Handle := TLS_client_method();
 end;
 
 end.

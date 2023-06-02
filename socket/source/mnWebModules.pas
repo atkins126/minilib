@@ -301,6 +301,7 @@ constructor TmodHttpRespond.Create;
 begin
   inherited Create;
   FCookies := TmnParams.Create;
+  FCookies.Delimiter := ';';
   FURIParams := TmnParams.Create;
   FHttpResult := hrNone;
 end;
@@ -346,7 +347,7 @@ procedure TmodHttpPostCommand.RespondResult(var Result: TmodRespondResult);
 begin
   if SameText(Request.Method, 'POST') then
   begin
-    if (Request.Header['Content-Type'].Have('application/json')) then
+    if (Request.Header.Field['Content-Type'].Have('application/json')) then
     begin
       Contents := TMemoryStream.Create;
       if Request.Stream <> nil then
@@ -383,7 +384,7 @@ procedure TmodWebModule.Created;
 begin
   inherited;
   FDefaultDocument := TStringList.Create;
-  UseKeepAlive := False;
+  UseKeepAlive := klvUndefined;
   UseCompressing := True;
 
   FDocumentRoot := '';
@@ -754,7 +755,7 @@ begin
     //Respond.AddHeader('Sec-WebSocket-Accept', Key);
   end;
 
-  if Module.UseKeepAlive and SameText(Request.Header.ReadString('Connection'), 'Keep-Alive') then
+  if SameText(Respond.Header.ReadString('Connection'), 'Keep-Alive') then
   begin
     Respond.KeepAlive := True;
     Respond.AddHeader('Connection', 'Keep-Alive');
@@ -763,9 +764,9 @@ begin
 
   if Module.UseCompressing then
   begin
-    if Request.Header['Accept-Encoding'].Have('gzip', [',']) then
+    if Request.Header.Field['Accept-Encoding'].Have('gzip', [',']) then
       Respond.CompressClass := TmnGzipStreamProxy
-    else if Request.Header['Accept-Encoding'].Have('deflate', [',']) then
+    else if Request.Header.Field['Accept-Encoding'].Have('deflate', [',']) then
       Respond.CompressClass := TmnDeflateStreamProxy
     else
       Respond.CompressClass := nil;
@@ -773,8 +774,8 @@ begin
       Respond.AddHeader('Content-Encoding', Respond.CompressClass.GetCompressName);
   end;
 
-  if (Request.Header['Content-Length'].IsExists) then
-    Request.ContentLength := Request.Header['Content-Length'].AsInteger;
+  if (Request.Header.Field['Content-Length'].IsExists) then
+    Request.ContentLength := Request.Header.Field['Content-Length'].AsInteger;
 end;
 
 procedure TmodHttpCommand.Unprepare(var Result: TmodRespondResult);
@@ -784,7 +785,7 @@ begin
   inherited;
   if not Respond.Header.Exists['Content-Length'] then
     Respond.KeepAlive := False;
-  if Respond.KeepAlive and Module.UseKeepAlive and SameText(Request.Header.ReadString('Connection'), 'Keep-Alive') then
+  if Respond.KeepAlive and (Module.UseKeepAlive in [klvUndefined, klvKeepAlive]) and SameText(Request.Header.ReadString('Connection'), 'Keep-Alive') then
   begin
     Result.Timout := Module.KeepAliveTimeOut;
     if Request.Header.IsExists('Keep-Alive') then //idk if really sent from client
@@ -794,7 +795,7 @@ begin
         //Keep-Alive: timeout=5, max=1000
         aParams.Separator := '=';
         aParams.Delimiter := ',';
-        aParams.AsString := Request.Header['Keep-Alive'].AsString;
+        aParams.AsString := Request.Header['Keep-Alive'];
         Result.Timout := aParams['timeout'].AsInteger;
       finally
         aParams.Free;

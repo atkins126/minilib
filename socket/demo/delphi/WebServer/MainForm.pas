@@ -10,7 +10,7 @@ interface
 
 uses
   Windows, Messages, SysUtils, StrUtils, Classes, Graphics, Controls, Forms, Dialogs, ShellAPI,
-  mnOpenSSLUtils, mnOpenSSL, mnLogs, mnHttpClient, osh, mnOpenSSLAPI,
+  mnOpenSSLUtils, mnOpenSSL, mnLogs, mnHttpClient, mnOpenSSLAPI,
   Registry, IniFiles, StdCtrls, ExtCtrls, mnConnections, mnSockets, mnServers, mnWebModules;
 
 type
@@ -100,7 +100,14 @@ begin
     aWebModule.UseCompressing := CompressChk.Checked;
   end;
   Server.Port := PortEdit.Text;
-  Server.UseSSL := UseSSLChk.Checked
+
+  Server.UseSSL := UseSSLChk.Checked;
+
+  Server.CertificateFile := 'server.crt';
+  Server.PrivateKeyFile := 'server.private.key';
+
+  //Server.CertificateFile := 'certificate.pem';
+  //Server.PrivateKeyFile := 'key.pem';
 end;
 
 function FindCmdLineValue(Switch: string; var Value: string; const Chars: TSysCharSet = ['/', '-']; Seprator: Char = ' '; IgnoreCase: Boolean = true): Boolean;
@@ -145,7 +152,7 @@ begin
   try
     s.WriteInteger('req', 'default_bits', 2048);
     s.WriteInteger('req', 'Serial', 0);
-    s.WriteInteger('req', 'Days', 1);
+    s.WriteInteger('req', 'Days', 300);
     s.WriteString('req', 'emailAddress', 'anasbash@hotmail.com');
     s.WriteString('req', 'distinguished_name', 'dn');
     s.WriteString('req', 'req_extensions', 'req_ext');
@@ -164,7 +171,9 @@ begin
     s.WriteString('alt_names', 'address', 'MyAddress');
     s.WriteString('alt_names', 'category', 'Industry');
 
-    MakeCert('certificate', s);
+    MakeCert2('server.crt', 'server.private.key', 'minilib', 'parmaja', 'SY', '', 2048, 0, 100);
+
+    //MakeCert2('server', s);
     {if MakeCert(s) then
     begin
       aPubKey := s.ReadString('Result', 'PubKey', '');
@@ -294,7 +303,10 @@ end;
 
 procedure TMain.ModuleServerAfterOpen(Sender: TObject);
 begin
-  ShellExecute(Handle, 'Open', PWideChar('http://127.0.0.1:'+PortEdit.Text+'/web'), nil, nil, 0);
+  if UseSSLChk.Checked then
+    ShellExecute(Handle, 'Open', PWideChar('https://127.0.0.1/web'), nil, nil, 0)
+  else
+    ShellExecute(Handle, 'Open', PWideChar('http://127.0.0.1:'+PortEdit.Text+'/web'), nil, nil, 0);
 end;
 
 procedure TMain.ModuleServerChanged(Listener: TmnListener);

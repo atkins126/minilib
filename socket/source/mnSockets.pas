@@ -53,6 +53,7 @@ type
     soWaitBeforeRead, //Wait for data come before read, that double the time wait if you set set ReadTimeout if no data come
     soWaitBeforeWrite, //Wait for ready before write, idk what for
     soCloseTimeout, //close socket if read timeout
+    soWebsocket,  //Use OpenSSL 1.1.1
     soSSL  //Use OpenSSL 1.1.1
     );
   TmnsoOptions = set of TmnsoOption;
@@ -262,18 +263,27 @@ begin
   begin
     if Context = nil then
     begin
-      Context := TContext.Create(TTLS_SSLMethod);//TODO check if no Context referenced
+      if Kind = skServer then
+        Context := TContext.Create(TTLS_SSLServerMethod)
+      else
+        Context := TContext.Create(TTLS_SSLClientMethod);
       ContextOwned := True;
     end;
 
     SSL := TSSL.Init(Context);
+
 
     SSL.SetSocket(FHandle);
 
     if Kind = skServer then
       SSL.Handshake
     else
-      SSL.Connect;
+    begin
+      if not SSL.Connect then
+      begin
+        raise EmnSocketException.Create('SSL Connect failed');
+      end;
+    end;
   end;
 end;
 
@@ -300,7 +310,7 @@ end;
 function TmnCustomSocket.Receive(var Buffer; var Count: Longint): TmnError;
 var
   ReadSize: Integer;
-  ret: Boolean;
+  ret: TsslError;
 begin
   //CheckActive; //no i do not want exeption in loop of buffer
   if not Active then
@@ -313,16 +323,19 @@ begin
     if SSL.Active then
     begin
       ret := SSL.Read(Buffer, Count, ReadSize);
-      if ret then
-      begin
-        Count := ReadSize;
-        Result := erSuccess;
-      end
-      else
-      begin
-        Count := 0;
-        Result := erInvalid
+      case ret of
+        seTimeout: Result := erTimeout;
+        seClosed: Result := erClosed;
+        seInvalid: Result := erInvalid;
+        else
+          Result := erSuccess;
       end;
+
+      if Result=erSuccess then
+        Count := ReadSize
+      else
+        Count := 0;
+
     end
     else
       Result := DoReceive(Buffer, Count);
@@ -572,7 +585,15 @@ begin
       raise EmnSocketException.CreateFmt('Connect failed [#%d]', [aErr]);
   end
   else
-    FSocket.Prepare;
+  begin
+    try
+      //check ssl
+      FSocket.Prepare;
+    except
+      Disconnect;
+      raise;
+    end;
+  end;
 end;
 
 function TmnSocketStream.CreateSocket(out vErr: Integer): TmnCustomSocket;

@@ -6,11 +6,15 @@ unit SendAndRecv;
 {$M+}
 {$H+}
 
+{TODO
+  Add TmnHttpClient example
+}
+
 interface
 
 uses
   Classes, SysUtils, IniFiles,
-  mnUtils, mnStreams,
+  mnUtils, mnStreams, mnFormData, mnHttpClient, mnWebModules,
   mnLogs, mnStreamUtils, mnSockets, mnClients, mnServers;
 
 {$ifdef GUI}
@@ -47,9 +51,13 @@ type
     procedure InternalCompressImage(GZ, WithHex: Boolean); //GZ image
 
     procedure ExampleSocket;
+    procedure ExampleTimeout;
     procedure ExampleSocketOpenStreet;
     procedure ExampleSocketTestTimeout;
     procedure ExampleSocketTestCancel;
+    procedure ExampleEchoServer;
+
+    procedure ExampleCloudFlare;
 
     procedure ExampleSmallBuffer; //read write line with small buffer
     procedure ExampleHexLine; //Hex lines
@@ -82,25 +90,32 @@ type
 
 const
   sMsg: AnsiString = '0123456789';
-  sPort: UTF8String = '9000';
+  sPort: UTF8String = '443';
   sHost = '127.0.0.1';
+
+
+type
+  TmyInfo = record
+
+    Address: UTF8String;
+    EndOfLine: UTF8String;
+    SocketOptionsStr: UTF8String;
+    NoDelay: Boolean;
+    CancelAfter: Boolean;
+    KeepAlive: Boolean;
+    WaitBeforeRead: Boolean;
+    UseSSL: Boolean;
+    QuickAck: Boolean;
+    TestTimeOut: Longint;// = -1;
+    SocketOptions: TmnsoOptions; //soWaitBeforeRead
+    procedure Clear;
+  end;
 
 var
   Application: TTestStream;
-
-  Reciever: TThreadReciever = nil;
-  Sender: TThreadSender = nil;
-
-  Address: UTF8String;
-  SocketOptionsStr: UTF8String;
-  NoDelay: Boolean = False;
-  CancelAfter: Boolean = False;
-  KeepAlive: Boolean = False;
-  WaitBeforeRead: Boolean = False;
-  UseSSL: Boolean = False;
-  QuickAck: Boolean = False;
-  TestTimeOut: Longint = -1;
-  SocketOptions: TmnsoOptions = []; //soWaitBeforeRead
+  Reciever: TThreadReciever;
+  Sender: TThreadSender;
+  info: TmyInfo;
   ini: TIniFile;
 
 implementation
@@ -115,20 +130,24 @@ begin
   try
     Count := 0;
     Stream := TmnServerSocket.Create('', sPort); //if u pass address, server will listen only on this network
-    Stream.ReadTimeout := TestTimeOut;
+    Stream.ReadTimeout := info.TestTimeOut;
     Stream.CertificateFile := Application.Location + 'certificate.pem';
     Stream.PrivateKeyFile := Application.Location + 'privatekey.pem';
-    Stream.Options := SocketOptions;
-    if NoDelay then
+    Stream.Options := info.SocketOptions;
+    if info.NoDelay then
       Stream.Options := Stream.Options + [soNoDelay];
-    if WaitBeforeRead then
+    if info.WaitBeforeRead then
       Stream.Options := Stream.Options + [soWaitBeforeRead];
-    if KeepAlive then
+    if info.KeepAlive then
       Stream.Options := Stream.Options + [soKeepAlive];
-    if QuickAck then
+    if info.QuickAck then
       Stream.Options := Stream.Options + [soQuickAck];
-    if UseSSL then
+    if info.UseSSL then
       Stream.Options := Stream.Options + [soSSL];
+
+    if info.EndOfLine<>'' then
+      Stream.EndOfLine := info.EndOfLine;
+
 
     Stream.Connect;
     try
@@ -137,19 +156,22 @@ begin
         Stream.ReadLineUTF8(s);
         WriteLn('Server After read Line "' + s + '"');
         if s = '' then
+        begin
           WriteLn('Seem server socket canceled :(');
+          Break;
+        end;
 
         if not Stream.Connected then
           break;
         if sMsg <> s then
         begin
-          Log.WriteLn('Error msg: ' + s);
-          Break;
+          //Log.WriteLn('Error msg: ' + s);
+          //Break;
         end;
-        if TestTimeOut > 0 then
-          Sleep(TestTimeOut * 2);
+        if info.TestTimeOut > 0 then
+          Sleep(info.TestTimeOut * 2);
 
-        Stream.WriteLine(sMsg);
+        //Stream.WriteLine(sMsg);
         Inc(Count);
         if not Stream.Connected then
           break;
@@ -181,18 +203,18 @@ const
   ACount: Integer = 100;
 begin
   try
-    Stream := TmnClientSocket.Create(Address, sPort);
-    Stream.ReadTimeout := TestTimeOut;
-    Stream.Options := SocketOptions;
-    if NoDelay then
+    Stream := TmnClientSocket.Create(info.Address, sPort);
+    Stream.ReadTimeout := info.TestTimeOut;
+    Stream.Options := info.SocketOptions;
+    if info.NoDelay then
       Stream.Options := Stream.Options + [soNoDelay];
-    if WaitBeforeRead then
+    if info.WaitBeforeRead then
       Stream.Options := Stream.Options + [soWaitBeforeRead];
-    if KeepAlive then
+    if info.KeepAlive then
       Stream.Options := Stream.Options + [soKeepAlive];
-    if QuickAck then
+    if info.QuickAck then
       Stream.Options := Stream.Options + [soQuickAck];
-    if UseSSL then
+    if info.UseSSL then
       Stream.Options := Stream.Options + [soSSL];
     try
       t := TThread.GetTickCount;
@@ -202,13 +224,14 @@ begin
       begin
         for i := 0 to ACount -1 do
         begin
-          if CancelAfter then
+          if info.CancelAfter then
             Reciever.Stream.Disconnect;
           b := Stream.WriteLineUTF8(sMsg) > 0;
           b := Stream.ReadLineUTF8(s);
+          WriteLn('client After read Line "' + s + '"');
           if sMsg <> s then
           begin
-            Log.WriteLn('Error msg: ' + s);
+            Log.WriteLn('Error msg: ' + s + ' b: ' + b.ToString(True) + ' connected ' + Stream.Connected.ToString(True));
             Break;
           end;
           if not Stream.Connected then
@@ -413,25 +436,45 @@ begin
   begin
     if not WithServer then
     begin
-      Address := GetAnswer('Enter IP address', Address);
-      ini.WriteString('Options', 'Address', Address);
+      Info.Address := GetAnswer('Enter IP address', Info.Address);
+      ini.WriteString('Options', 'Address', Info.Address);
     end
     else
-      Address := sHost;
+      Info.Address := sHost;
   end;
 
-  SocketOptionsStr := ini.ReadString('Options', 'SocketOptions', SocketOptionsStr);
-  S := LowerCase(GetAnswer('w=WaitBeforeRead, n=NoDelay, k=KeepAlive, q=QuickAck s=SSL or c to clear', SocketOptionsStr, 'c'));
-  NoDelay := Pos('n', S) > 0;
-  KeepAlive := Pos('k', S) > 0;
-  QuickAck := Pos('q', S) > 0;
-  WaitBeforeRead := Pos('w', S) > 0;
-  UseSSL := Pos('s', S) > 0;
-  TestTimeOut := 100;
-  CancelAfter := False;
+  Info.SocketOptionsStr := ini.ReadString('Options', 'SocketOptions', Info.SocketOptionsStr);
+  S := LowerCase(GetAnswer('w=WaitBeforeRead, n=NoDelay, k=KeepAlive, q=QuickAck s=SSL or c to clear', Info.SocketOptionsStr, 'c'));
+  Info.NoDelay := Pos('n', S) > 0;
+  Info.KeepAlive := Pos('k', S) > 0;
+  Info.QuickAck := Pos('q', S) > 0;
+  Info.WaitBeforeRead := Pos('w', S) > 0;
+  Info.UseSSL := Pos('s', S) > 0;
+  Info.TestTimeOut := 1000;
+  Info.CancelAfter := False;
 
   if s <> 'c' then
     ini.WriteString('Options', 'SocketOptions', S);
+  InternalExampleSocket(WithServer, WithClient);
+end;
+
+procedure TTestStream.ExampleTimeout;
+var
+  WithServer, WithClient: boolean;
+begin
+  WithServer := True;
+  WithClient := True;
+
+  Info.Address := '127.0.0.1';
+
+  Info.NoDelay := True;
+  Info.KeepAlive := False;
+  Info.QuickAck := False;
+  Info.WaitBeforeRead := True;
+  Info.UseSSL := False;
+  Info.TestTimeOut := 100;
+  Info.CancelAfter := False;
+
   InternalExampleSocket(WithServer, WithClient);
 end;
 
@@ -446,14 +489,14 @@ const
   sURL = 'https://c.tile.openstreetmap.de/17/65536/65536.png';
   //sURL = 'zaherdirkey.wordpress.com';
 begin
-  NoDelay := True;
-  KeepAlive := False;
-  QuickAck := False;
-  UseSSL := False;
+  Info.NoDelay := True;
+  Info.KeepAlive := False;
+  Info.QuickAck := False;
+  Info.UseSSL := False;
   try
-    Stream := TmnClientSocket.Create('c.tile.openstreetmap.de', '443');
-    Stream.ReadTimeout := TestTimeOut;
-    Stream.Options := SocketOptions;
+    Stream := TmnClientSocket.Create('c.tile.openstreetmap.org', '443');
+    Stream.ReadTimeout := Info.TestTimeOut;
+    Stream.Options := Info.SocketOptions;
     Stream.Options := Stream.Options + [soNoDelay];
 //  Stream.Options := Stream.Options + [soKeepAlive];
 //    if QuickAck then
@@ -468,7 +511,7 @@ begin
       if Stream.Connected then
       begin
         Stream.WriteLineUTF8('GET /17/65536/65536.png HTTP/1.1');
-        Stream.WriteLineUTF8('Host: c.tile.openstreetmap.de');
+        Stream.WriteLineUTF8('Host: c.tile.openstreetmap.org');
         Stream.WriteLineUTF8('User-Agent: Mozilla');
         Stream.WriteLineUTF8('Connection: close');
         Stream.WriteLineUTF8('');
@@ -509,23 +552,23 @@ end;
 
 procedure TTestStream.ExampleSocketTestTimeout;
 begin
-  NoDelay := False;
-  KeepAlive := False;
-  QuickAck := False;
-  UseSSL := False;
-  TestTimeOut := 1000;
-  CancelAfter := False;
+  Info.NoDelay := False;
+  Info.KeepAlive := False;
+  Info.QuickAck := False;
+  Info.UseSSL := False;
+  Info.TestTimeOut := 1000;
+  Info.CancelAfter := False;
   InternalExampleSocket(true, true);
 end;
 
 procedure TTestStream.ExampleSocketTestCancel;
 begin
-  NoDelay := False;
-  KeepAlive := False;
-  QuickAck := False;
-  UseSSL := False;
-  TestTimeOut := 1000;
-  CancelAfter := True;
+  Info.NoDelay := False;
+  Info.KeepAlive := False;
+  Info.QuickAck := False;
+  Info.UseSSL := False;
+  Info.TestTimeOut := 1000;
+  Info.CancelAfter := True;
   InternalExampleSocket(true, true);
 end;
 
@@ -729,6 +772,47 @@ begin
   end;
 end;
 
+procedure TTestStream.ExampleCloudFlare;
+var
+  m: TStringStream;
+  c: TmnHttpClient;
+  s: string;
+begin
+  m := TStringStream.Create;
+  c := TmnHttpClient.Create;
+  try
+    c.UserAgent := 'curl/7.83.1';
+    //c.UserAgent := 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/113.0';
+
+    //c.Request.Accept := '*/*';
+    //c.Compressing := True;
+
+    s := m.DataString;
+
+
+    //c.GetString('https://api.oursms.com/api-a/msgs?username=Alhayatsweets&token=2NgwEKQgO18yLAgXfTU0&src=ALHAYAT&body=12347&dests=+966504544896', s);
+    //c.GetString('https://community.cloudflare.com/', s);
+    c.GetString('https://raw.githubusercontent.com/paramjani12/paramjani12/main/README.md', s);
+
+    //c.Get('https://api.oursms.com/api-a/msgs?username=Alhayatsweets&token=2NgwEKQgO18yLAgXfTU0&src=ALHAYAT&body=12347&dests=+966504544896');
+    //c.ReadStream(m);
+
+
+    Writeln(c.Response.Head);
+    for var h in c.Response.Header do
+      Writeln(h.GetNameValue);
+
+    Writeln(s);
+
+    Writeln(c.Response.StatusCode.ToString);
+    Readln;
+
+  finally
+    c.Free;
+    m.Free;
+  end;
+end;
+
 procedure TTestStream.ExampleCopyHexImage;
 var
   aImageFile: TFileStream;
@@ -765,6 +849,28 @@ begin
   finally
     FreeAndNil(Stream);
   end;
+end;
+
+procedure TTestStream.ExampleEchoServer;
+var
+  WithServer, WithClient: boolean;
+begin
+  WithServer := True;
+  WithClient := False;
+
+  Info.Clear;
+  Info.Address := '127.0.0.1';
+
+  Info.NoDelay := True;
+  Info.KeepAlive := False;
+  Info.QuickAck := False;
+  Info.WaitBeforeRead := True;
+  Info.UseSSL := True;
+  Info.TestTimeOut := -1;
+  Info.CancelAfter := False;
+  Info.EndOfLine := #$D#$A;
+
+  InternalExampleSocket(WithServer, WithClient);
 end;
 
 procedure TTestStream.ExampleGZImage;
@@ -922,7 +1028,7 @@ var
 begin
   //InitOpenSSL;
   //if not FileExists(Application.Location + 'certificate.pem') then
-    //MakeCert('certificate.pem', 'privatekey.pem', 'PARMAJA', 'PARMAJA TEAM', 'SY', '', 2048, 0, 365);
+    //MakeCert2('certificate.pem', 'privatekey.pem', 'PARMAJA', 'PARMAJA TEAM', 'SY', '', 2048, 0, 365);
 
   ini := TIniFile.Create(Application.Location + 'Options.ini');
   try
@@ -930,8 +1036,11 @@ begin
       WriteLn('Welcome to testing Streams');
       WriteLn('');
       InstallConsoleLog;
-      Address := ini.ReadString('options', 'Address', sHost);
+      Info.Address := ini.ReadString('options', 'Address', sHost);
+      AddProc('Example Download Cloud Flare ', ExampleCloudFlare);
+      AddProc('Example Echo Server ', ExampleEchoServer);
       AddProc('ExampleSocket: Socket threads', ExampleSocket);
+      AddProc('ExampleTimeout: Socket threads', ExampleTimeout);
       AddProc('ExampleSocket: Socket OpenStreetMap', ExampleSocketOpenStreet);
       AddProc('Example Socket Timout: Socket threads', ExampleSocketTestTimeout);
       AddProc('Example Socket Test Cancel', ExampleSocketTestCancel);
@@ -974,6 +1083,7 @@ begin
             Break;
           WriteLn('Running "' + Commands[n - 1].Name + '"');
           WriteLn;
+          Info.Clear;
           Commands[n - 1].proc();
         end;
         WriteLn;
@@ -989,6 +1099,13 @@ begin
     ini.Free;
     //Halt;
   end;
+end;
+
+{ TmyInfo }
+
+procedure TmyInfo.Clear;
+begin
+  Finalize(info);
 end;
 
 end.
