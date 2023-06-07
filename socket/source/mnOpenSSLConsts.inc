@@ -104,8 +104,8 @@
   BIO_SOCK_NONBLOCK                   = $08;
   BIO_SOCK_NODELAY                    = $10;
 
-  SSL_MODE_ENABLE_PARTIAL_WRITE       = $00000001;
-  SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER = $00000002;
+  SSL_MODE_ENABLE_PARTIAL_WRITE                 = $00000001;
+  SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER           = $00000002;
   SSL_MODE_AUTO_RETRY                           = $00000004;
   SSL_MODE_NO_AUTO_CHAIN                        = $00000008;
   SSL_MODE_RELEASE_BUFFERS                      = $00000010;
@@ -3376,3 +3376,27 @@
   SSL_CB_READ_ALERT        = SSL_CB_ALERT or SSL_CB_READ;
   SSL_CB_WRITE             = $08;
   SSL_CB_WRITE_ALERT       = SSL_CB_ALERT or SSL_CB_WRITE;
+
+
+  OPENSSL_NPN_NEGOTIATED   = 1;
+  SSL_TLSEXT_ERR_NOACK     = -2;
+  SSL_TLSEXT_ERR_OK        = 0;
+
+
+  SSL_CTRL_SET_DEBUG_LEVEL = 14;
+  SSL_DEBUG_NONE           = 0;
+  SSL_DEBUG_ERROR          = $1;
+  SSL_DEBUG_STATE          = $2;
+  SSL_DEBUG_INFO           = $4;
+  SSL_DEBUG_PACKET         = $8;
+  SSL_DEBUG_HANDSHAKE      = $10;
+  SSL_DEBUG_CONNECT        = $20;
+  SSL_DEBUG_RENEGOTIATE    = $40;
+  SSL_DEBUG_VERIFY         = $80;
+  SSL_DEBUG_CACHE          = $100;
+  SSL_DEBUG_CIPHERS        = $200;
+  SSL_DEBUG_SESSION        = $400;
+  SSL_DEBUG_TMP            = $800;
+  SSL_DEBUG_ENGINE         = $1000;
+  SSL_DEBUG_ANY            = $ffff;
+
