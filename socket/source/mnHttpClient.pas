@@ -251,7 +251,7 @@ function HttpDownloadFile(URL: string; FileName: string): TFileSize;
 var
   aHttpClient: TmnCustomHttpClient;
 begin
-  aHttpClient := TmnCustomHttpClient.Create;
+  aHttpClient := TmnHttpClient.Create;
   try
     Result := aHttpClient.GetFile(URL, FileName);
   finally
@@ -275,7 +275,7 @@ function HttpGetFileSize(URL: string; out FileSize: TFileSize): Boolean;
 var
   aHttpClient: TmnCustomHttpClient;
 begin
-  aHttpClient := TmnCustomHttpClient.Create;
+  aHttpClient := TmnHttpClient.Create;
   try
     Result := aHttpClient.GetFileSize(URL, FileSize);
   finally
@@ -466,11 +466,13 @@ procedure TmnHttpRequest.SendCommand(Command: string; vData: PByte; vCount: Card
     //TFile.AppendAllText('c:\temp\h.Log', s+#13);
   end;
 
+  {$ifndef FPC}
   procedure _Write(const s: String); overload;
   begin
     _Write(UTF8Encode(s));
     //TFile.AppendAllText('c:\temp\h.Log', s+#13);
   end;
+  {$endif}
 
 var
   s: UTF8String;
@@ -712,8 +714,6 @@ begin
     if ChunkedProxy <> nil then
       ChunkedProxy.Disable;
   end;
-
-
 
   if Response.Header.Field['Content-Encoding'].Have('gzip', [',']) then
     aCompressClass := TmnGzipStreamProxy

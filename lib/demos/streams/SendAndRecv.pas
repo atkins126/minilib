@@ -14,7 +14,7 @@ interface
 
 uses
   Classes, SysUtils, IniFiles,
-  mnUtils, mnStreams, mnFormData, mnHttpClient, mnWebModules,
+  mnUtils, mnStreams, mnFormData, mnHttpClient, mnWebModules, mnFields,
   mnLogs, mnStreamUtils, mnSockets, mnClients, mnServers;
 
 {$ifdef GUI}
@@ -29,6 +29,8 @@ type
 
   TThreadReciever = class(TThread) //Server
   protected
+    procedure RunServer;
+    procedure RunHttp;
     procedure Execute; override;
   public
     Stream: TmnServerSocket;
@@ -48,16 +50,17 @@ type
   TTestStream = class(TObject)
   protected
     procedure InternalExampleSocket(WithServer: Boolean = True; WithClient: Boolean = True); //Socket threads
-    procedure InternalCompressImage(GZ, WithHex: Boolean); //GZ image
 
     procedure ExampleSocket;
     procedure ExampleTimeout;
     procedure ExampleSocketOpenStreet;
     procedure ExampleSocketTestTimeout;
     procedure ExampleSocketTestCancel;
-    procedure ExampleEchoServer;
+    procedure ExamplePrintServer;
+    procedure ExampleEchoAliveServer;
 
     procedure ExampleBIOPostmanEcho;
+    procedure ExampleReadFormData;
 
     procedure ExamplePostmanEcho;
     procedure ExampleCloudFlare;
@@ -66,6 +69,7 @@ type
     procedure ExampleHexLine; //Hex lines
     procedure ExampleHexImage; //Hex image
     procedure ExampleCopyHexImage; //Hex image2 images and read one
+    procedure InternalCompressImage(GZ, WithHex: Boolean); //GZ image
 
     procedure ExampleChunkedRead;
     procedure ExampleChunkedWrite;
@@ -93,7 +97,7 @@ type
 
 const
   sMsg: AnsiString = '0123456789';
-  sPort: UTF8String = '443';
+  sPort: UTF8String = '8443';
   sHost = '127.0.0.1';
 
 
@@ -111,6 +115,7 @@ type
     QuickAck: Boolean;
     TestTimeOut: Longint;// = -1;
     SocketOptions: TmnsoOptions; //soWaitBeforeRead
+    Http: Boolean; //soWaitBeforeRead
     procedure Clear;
   end;
 
@@ -126,12 +131,8 @@ implementation
 { TThreadReciever }
 
 procedure TThreadReciever.Execute;
-var
-  s: UTF8String;
-  Count: Integer;
 begin
   try
-    Count := 0;
     Stream := TmnServerSocket.Create('', sPort); //if u pass address, server will listen only on this network
     Stream.ReadTimeout := info.TestTimeOut;
     Stream.CertificateFile := Application.Location + 'certificate.pem';
@@ -154,36 +155,15 @@ begin
 
     Stream.Connect;
     try
-      while true do
-      begin
-        Stream.ReadLineUTF8(s);
-        WriteLn('Server After read Line "' + s + '"');
-        if s = '' then
-        begin
-          WriteLn('Seem server socket canceled :(');
-          Break;
-        end;
-
-        if not Stream.Connected then
-          break;
-        if sMsg <> s then
-        begin
-          //Log.WriteLn('Error msg: ' + s);
-          //Break;
-        end;
-        if info.TestTimeOut > 0 then
-          Sleep(info.TestTimeOut * 2);
-
-        //Stream.WriteLine(sMsg);
-        Inc(Count);
-        if not Stream.Connected then
-          break;
-      end;
+      if info.Http then
+        RunHttp
+      else
+        RunServer;
       Stream.Disconnect;
     finally
       Stream.Free;
     end;
-    WriteLn('Server Count: ' + IntToStr(Count));
+    //WriteLn('Server Count: ' + IntToStr(Count));
     WriteLn('Server end execute');
   except
     on E: Exception do
@@ -253,6 +233,76 @@ begin
       WriteLn(E.Message);
       raise;
     end;
+  end;
+end;
+
+procedure TThreadReciever.RunHttp;
+
+  procedure _ReadHeader;
+  var
+    s: UTF8String;
+  begin
+    repeat
+      Stream.ReadLineUTF8(s);
+      WriteLn('Server read header "' + s + '"');
+    until s = '';
+  end;
+
+  procedure _WriteHeader;
+  begin
+    Stream.WriteLineUTF8('HTTP/1.1 200 OK');
+    Stream.WriteLineUTF8('content-length: 0');
+    //Stream.WriteLineUTF8('Connection: keep-alive');
+    Stream.WriteLineUTF8('Connection: close');
+    Stream.WriteLineUTF8('content-type: text/html; charset=UTF-8');
+    Stream.WriteLineUTF8('');
+  end;
+
+var
+  s: UTF8String;
+  Count: Integer;
+begin
+  Count := 0;
+  while true do
+  begin
+    if not Stream.Connected then
+      break;
+
+    _ReadHeader;
+    _WriteHeader;
+  end;
+end;
+
+procedure TThreadReciever.RunServer;
+var
+  s: UTF8String;
+  Count: Integer;
+begin
+  Count := 0;
+  while true do
+  begin
+    Stream.ReadLineUTF8(s);
+    WriteLn('Server After read Line "' + s + '"');
+    if s = '' then
+    begin
+      WriteLn('Seem server socket canceled :(');
+      Break;
+    end;
+
+    if not Stream.Connected then
+      break;
+    if sMsg <> s then
+    begin
+      //Log.WriteLn('Error msg: ' + s);
+      //Break;
+    end;
+    if info.TestTimeOut > 0 then
+      Sleep(info.TestTimeOut * 2);
+
+    //Stream.WriteLine(sMsg);
+    Inc(Count);
+    if not Stream.Connected then
+      break;
   end;
 end;
 
@@ -640,6 +690,7 @@ var
   m: TStringStream;
   c: TmnHttpClient;
   s: string;
+  h: TmnField;
 begin
   //https://documenter.getpostman.com/view/5025623/SWTG5aqV
   m := TStringStream.Create;
@@ -662,7 +713,7 @@ begin
 
     Writeln('');
     Writeln('>'+c.Response.Head);
-    for var h in c.Response.Header do
+    for h in c.Response.Header do
       Writeln('>'+h.GetNameValue);
     Writeln(s);
 
@@ -671,6 +722,27 @@ begin
   finally
     c.Free;
     m.Free;
+  end;
+end;
+
+procedure TTestStream.ExampleReadFormData;
+var
+  aTextFile: TFileStream;
+  Stream: TmnBufferStream;
+  aFormData: TmnFormData;
+begin
+  aTextFile:=TFileStream.Create(Location + 'formdata1.txt', fmOpenRead);
+  Stream := TmnWrapperStream.Create(aTextFile, True);
+  try
+    Stream.EndOfLine := sWinEndOfLine;
+    aFormData := TmnFormData.Create;
+    try
+      aFormData.Read(Stream);
+    finally
+      FreeAndNil(aFormData);
+    end;
+  finally
+    Stream.Free;
   end;
 end;
 
@@ -739,6 +811,7 @@ procedure TTestStream.ExampleBIOPostmanEcho;
 var
   c: TmnBIOHttpClient;
   s: string;
+  h: TmnField;
 begin
   //https://documenter.getpostman.com/view/5025623/SWTG5aqV
   c := TmnBIOHttpClient.Create;
@@ -758,7 +831,7 @@ begin
 
     Writeln('');
     Writeln('>'+c.Response.Head);
-    for var h in c.Response.Header do
+    for h in c.Response.Header do
       Writeln('>'+h.GetNameValue);
     Writeln(s);
 
@@ -853,6 +926,7 @@ var
   m: TStringStream;
   c: TmnHttpClient;
   s: string;
+  h: TmnField;
 begin
   m := TStringStream.Create;
   c := TmnHttpClient.Create;
@@ -875,11 +949,11 @@ begin
 
     Writeln('');
 //    Writeln('<'+c.Request.Head);
-    for var h in c.Request.Header do
+    for h in c.Request.Header do
       Writeln('<'+h.GetNameValue);
     Writeln('');
     Writeln('>'+c.Response.Head);
-    for var h in c.Response.Header do
+    for h in c.Response.Header do
       Writeln('>'+h.GetNameValue);
     Writeln('');
     Writeln(s);
@@ -930,13 +1004,26 @@ begin
   end;
 end;
 
-procedure TTestStream.ExampleEchoServer;
-var
-  WithServer, WithClient: boolean;
+procedure TTestStream.ExampleEchoAliveServer;
 begin
-  WithServer := True;
-  WithClient := False;
+  Info.Clear;
+  Info.Address := '127.0.0.1';
 
+  Info.NoDelay := True;
+  Info.KeepAlive := True;
+  Info.QuickAck := False;
+  Info.WaitBeforeRead := True;
+  Info.UseSSL := False;
+  Info.TestTimeOut := -1;
+  Info.CancelAfter := False;
+  Info.EndOfLine := #$D#$A;
+  Info.Http := True;
+
+  InternalExampleSocket(True, False);
+end;
+
+procedure TTestStream.ExamplePrintServer;
+begin
   Info.Clear;
   Info.Address := '127.0.0.1';
 
@@ -949,7 +1036,7 @@ begin
   Info.CancelAfter := False;
   Info.EndOfLine := #$D#$A;
 
-  InternalExampleSocket(WithServer, WithClient);
+  InternalExampleSocket(True, False);
 end;
 
 procedure TTestStream.ExampleGZImage;
@@ -1106,7 +1193,10 @@ var
   end;
 var
   BypassList: Boolean;
+  RunCount: Integer;
+  SearchStr: string;
 begin
+  RunCount := 0;
   BypassList := False;
   //InitOpenSSL;
   //if not FileExists(Application.Location + 'certificate.pem') then
@@ -1119,61 +1209,99 @@ begin
       WriteLn('');
       InstallConsoleLog;
       Info.Address := ini.ReadString('options', 'Address', sHost);
-      AddProc('Example Download Cloud Flare ', ExampleCloudFlare);
-      AddProc('Example BIO Postman Echo ', ExampleBIOPostmanEcho);
-      AddProc('Example Postman Echo ', ExamplePostmanEcho);
-      AddProc('Example Echo Server ', ExampleEchoServer);
-      AddProc('ExampleSocket: Socket threads', ExampleSocket);
-      AddProc('ExampleTimeout: Socket threads', ExampleTimeout);
-      AddProc('ExampleSocket: Socket OpenStreetMap', ExampleSocketOpenStreet);
-      AddProc('Example Socket Timout: Socket threads', ExampleSocketTestTimeout);
-      AddProc('Example Socket Test Cancel', ExampleSocketTestCancel);
-      AddProc('ExampleSmallBuffer: read write line with small buffer', ExampleSmallBuffer);
-      AddProc('ExampleCopyHexImage: Hex image2 images and read one', ExampleCopyHexImage);
-      AddProc('ExampleInflateImage: Inflate image', ExampleInflateImage);
-      AddProc('ExampleGZImage: GZ image', ExampleGZImage);
-      AddProc('ExampleUnGZImage: Unzip GZ image', ExampleGZImage);
-      AddProc('ExampleHexLine: Hex lines', ExampleHexLine);
-      AddProc('ExampleHexImage: Hex image', ExampleHexImage);
+      AddProc('Download Cloud Flare ', ExampleCloudFlare);
+      AddProc('BIO Postman Echo ', ExampleBIOPostmanEcho);
+      AddProc('Postman Echo ', ExamplePostmanEcho);
+      AddProc('Line Print Server ', ExamplePrintServer);
+      AddProc('Echo Keep Alive Server ', ExampleEchoAliveServer);
+
+      AddProc('Socket threads', ExampleSocket);
+      AddProc('Timout Socket threads', ExampleTimeout);
+      AddProc('Socket OpenStreetMap', ExampleSocketOpenStreet);
+      AddProc('Socket Timout: Socket threads', ExampleSocketTestTimeout);
+      AddProc('Socket Test Cancel', ExampleSocketTestCancel);
+
+      AddProc('Read FormData', ExampleReadFormData);
+
+      AddProc('SmallBuffer: read write line with small buffer', ExampleSmallBuffer);
+      AddProc('CopyHexImage: Hex image2 images and read one', ExampleCopyHexImage);
+      AddProc('InflateImage: Inflate image', ExampleInflateImage);
+      AddProc('GZImage: GZ image', ExampleGZImage);
+      AddProc('UnGZImage: Unzip GZ image', ExampleGZImage);
+      AddProc('HexLine: Hex lines', ExampleHexLine);
+      AddProc('HexImage: Hex image', ExampleHexImage);
       AddProc('CopyFile Write', CopyFileWrite);
       AddProc('CopyFile Read', CopyFileRead);
-      AddProc('ExampleGZText: GZ Text', ExampleGZText);
-      AddProc('ExampleGZText: Headered Text', ExampleTextWithHeader);
-      AddProc('ExampleFileText: Readline Text', ExampleReadLineFile);
-      AddProc('ExampleChunked: Read Chunked lines', ExampleChunkedRead);
-      AddProc('ExampleChunked: Write Chunked lines', ExampleChunkedWrite);
-      AddProc('ExampleChunked: Image Chunked lines', ExampleChunkedImage);
-
+      AddProc('GZText: GZ Text', ExampleGZText);
+      AddProc('GZText: Headered Text', ExampleTextWithHeader);
+      AddProc('FileText: Readline Text', ExampleReadLineFile);
+      AddProc('Chunked: Read Chunked lines', ExampleChunkedRead);
+      AddProc('Chunked: Write Chunked lines', ExampleChunkedWrite);
+      AddProc('Chunked: Image Chunked lines', ExampleChunkedImage);
 
       while true do
       begin
-        if not BypassList then
+        if (ParamCount>0) then
         begin
-          for n := 0 to Length(Commands) - 1 do
-            WriteLn(IntToStr(n + 1) + ': ' + Commands[n].name);
-          WriteLn('0: Type 0 to exit');
+          if (RunCount>0) then
+          begin
+            s := 'exit';
+            WriteLn('Press Enter to exit');
+            ReadLn;
+          end
+          else
+            s := ParamStr(1);
+        end
+        else
+        begin
+          if not BypassList then
+          begin
+            for n := 0 to Length(Commands) - 1 do
+            begin
+              if (SearchStr = '') or (Pos(SearchStr, LowerCase(Commands[n].name))>0) then
+                WriteLn(IntToStr(n + 1) + ': ' + Commands[n].name);
+            end;
+            WriteLn('0: Type 0 to exit');
+            WriteLn;
+          end;
+          BypassList := False;
+          Write('Enter command: ');
+          s := '';
+          ReadLn(s);
           WriteLn;
+          s := trim(s);
+          SearchStr := '';
         end;
-        BypassList := False;
-        Write('Enter command: ');
-        s := '';
-        ReadLn(s);
-        WriteLn;
-        s := trim(s);
+
         if s = '' then
           //Nothing
-        else if (s = '') or SameText(s, 'exit') then
+        else if SameText(s, 'exit') or SameText(s, 'quit') or SameText(s, 'q') or SameText(s, '0') then
           Break
         else
         begin
           n := StrToIntDef(s, 0);
           if (n = 0) or (n > Length(Commands)) then
-            Break;
-          WriteLn('Running "' + Commands[n - 1].Name + '"');
-          WriteLn;
-          Info.Clear;
-          Commands[n - 1].proc();
-          BypassList := True;
+          begin
+            SearchStr := LowerCase(s);
+          end
+          else
+          begin
+            WriteLn('Running "' + Commands[n - 1].Name + '"');
+            WriteLn;
+            Info.Clear;
+            try
+              Commands[n - 1].proc();
+            except
+              on E: Exception do
+              begin
+                WriteLn(E.Message);
+//                raise;
+              end;
+            end;
+
+            BypassList := True;
+            Inc(RunCount);
+          end;
         end;
         WriteLn;
       end;
@@ -1195,6 +1323,7 @@ end;
 procedure TmyInfo.Clear;
 begin
   Finalize(info);
+  FillChar(Self, SizeOf(Self), 0);
 end;
 
 end.
