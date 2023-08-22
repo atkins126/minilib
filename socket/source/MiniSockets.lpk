@@ -16,6 +16,11 @@
           <UseAnsiStrings Value="False"/>
         </SyntaxOptions>
       </Parsing>
+      <Linking>
+        <Debugging>
+          <DebugInfoType Value="dsDwarf3"/>
+        </Debugging>
+      </Linking>
       <Other>
         <CompilerMessages>
           <IgnoredMessages idx5024="True"/>
@@ -68,10 +73,6 @@
       <Item>
         <Filename Value="mnZKTClients.pas"/>
         <UnitName Value="mnZKTClients"/>
-      </Item>
-      <Item>
-        <Filename Value="mnFormData.pas"/>
-        <UnitName Value="mnFormData"/>
       </Item>
       <Item>
         <Filename Value="mnHttpClient.pas"/>

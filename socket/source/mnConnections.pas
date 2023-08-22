@@ -69,7 +69,7 @@ type
   public
     constructor Create;
     destructor Destroy; override;
-    //procedure Stop; virtual; deprecated;
+
     property Count: Integer read GetCount;
     property LastID: Int64 read FLastID;
     property List: TmnConnectionList read FList;
@@ -84,28 +84,22 @@ type
     FID: Integer;
     FOwner: TmnConnections;
   strict protected
-    function GetConnected: Boolean; virtual; abstract;
+    function GetConnected: Boolean; virtual; abstract; //* TODO: rename to GetActive
     procedure Created; virtual;
     procedure Prepare; virtual;
     procedure Process; virtual;
     procedure Unprepare; virtual;
-    procedure Stopped; virtual; //this run main thread called by Synchronize, so dont use it for hard code
+
     property Owner: TmnConnections read FOwner;
   protected
     procedure Execute; override;
-    //procedure SetStream(AValue: TmnConnectionStream);
     procedure HandleException(E: Exception); virtual;
   public
     constructor Create(vOwner: TmnConnections);
     destructor Destroy; override;
 
-    //procedure Connect; virtual;
-    //procedure Disconnect(Safe: Boolean = true); virtual; // don't raise exception, now by default true
-    //property Stream: TmnConnectionStream read FStream; //write SetStream; //not now
-
     property Connected: Boolean read GetConnected;
 
-    //procedure Stop; virtual; deprecated;
     property ID: Integer read FID write FID;
   end;
 
@@ -135,10 +129,6 @@ begin
   FList.Free;
   inherited;
 end;
-
-{procedure TmnConnections.Stop;
-begin
-end;}
 
 procedure TmnConnections.Add(Connection: TmnConnection);
 begin
@@ -197,7 +187,7 @@ begin
     end;
   finally
     Unprepare;
-    Synchronize(Stopped);//Synchronize not queue, to sure all other queue is processed
+    //Synchronize(Stopped);//Synchronize not queue, to sure all other queue is processed
 
     if FOwner <> nil then
       if FreeOnTerminate then
@@ -252,15 +242,8 @@ end;
 
 destructor TmnConnection.Destroy;
 begin
-  {if Connected then
-    Stop;}
   inherited;
 end;
-
-{procedure TmnConnection.Stop;
-begin
-  Terminate;
-end;}
 
 procedure TmnConnection.HandleException(E: Exception);
 begin
@@ -275,10 +258,6 @@ begin
 end;
 
 procedure TmnConnection.Unprepare;
-begin
-end;
-
-procedure TmnConnection.Stopped;
 begin
 end;
 

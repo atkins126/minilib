@@ -14,7 +14,7 @@ interface
 
 uses
   Classes, SysUtils, IniFiles,
-  mnUtils, mnStreams, mnFormData, mnHttpClient, mnWebModules, mnFields,
+  mnUtils, mnStreams, mnMultipartData, mnHttpClient, mnWebModules, mnFields,
   mnLogs, mnStreamUtils, mnSockets, mnClients, mnServers;
 
 {$ifdef GUI}
@@ -60,6 +60,7 @@ type
     procedure ExampleEchoAliveServer;
 
     procedure ExampleBIOPostmanEcho;
+    procedure ExampleWriteFormData;
     procedure ExampleReadFormData;
 
     procedure ExamplePostmanEcho;
@@ -648,6 +649,34 @@ begin
   end;
 end;
 
+procedure TTestStream.ExampleWriteFormData;
+var
+  m: TMemoryStream;
+  Stream: TmnBufferStream;
+  aFormData: TmnMultipartData;
+  aItm: TmnMultipartDataItem;
+begin
+  m := TMemoryStream.Create;
+  Stream := TmnWrapperStream.Create(m, False);
+  try
+    Stream.EndOfLine := sWinEndOfLine;
+    aFormData := TmnMultipartData.Create;
+    try
+      aFormData.Boundary := TGUID.NewGuid.ToString;
+      TmnMultipartDataValue.Create(aFormData).Value := 'test@code.com';
+      TmnMultipartDataFileName.Create(aFormData).FileName := 'image.jpg';
+
+      aFormData.Write(Stream);
+    finally
+      FreeAndNil(aFormData);
+    end;
+
+    m.SaveToFile('formdata.txt');
+  finally
+    Stream.Free;
+  end;
+end;
+
 procedure TTestStream.ExampleHexLine;
 var
   Stream: TmnBufferStream;
@@ -729,15 +758,23 @@ procedure TTestStream.ExampleReadFormData;
 var
   aTextFile: TFileStream;
   Stream: TmnBufferStream;
-  aFormData: TmnFormData;
+  aFormData: TmnMultipartData;
+  aItm: TmnMultipartDataItem;
 begin
   aTextFile:=TFileStream.Create(Location + 'formdata1.txt', fmOpenRead);
   Stream := TmnWrapperStream.Create(aTextFile, True);
   try
     Stream.EndOfLine := sWinEndOfLine;
-    aFormData := TmnFormData.Create;
+    aFormData := TmnMultipartData.Create;
     try
-      aFormData.Read(Stream);
+      //aFormData.Read(Stream);
+      aFormData.ReadCallback(Stream);
+      for aItm in aFormData do
+      begin
+        Writeln(aItm.Header.AsString);
+        Writeln(aItm.Name);
+      end;
+
     finally
       FreeAndNil(aFormData);
     end;
@@ -1010,7 +1047,7 @@ begin
   Info.Address := '127.0.0.1';
 
   Info.NoDelay := True;
-  Info.KeepAlive := True;
+  Info.KeepAlive := False;
   Info.QuickAck := False;
   Info.WaitBeforeRead := True;
   Info.UseSSL := False;
@@ -1200,7 +1237,7 @@ begin
   BypassList := False;
   //InitOpenSSL;
   //if not FileExists(Application.Location + 'certificate.pem') then
-    //MakeCert2('certificate.pem', 'privatekey.pem', 'PARMAJA', 'PARMAJA TEAM', 'SY', '', 2048, 0, 365);
+  //MakeCert2('certificate.pem', 'privatekey.pem', 'PARMAJA', 'PARMAJA TEAM', 'SY', '', 2048, 0, 365);
 
   ini := TIniFile.Create(Application.Location + 'Options.ini');
   try
@@ -1221,6 +1258,7 @@ begin
       AddProc('Socket Timout: Socket threads', ExampleSocketTestTimeout);
       AddProc('Socket Test Cancel', ExampleSocketTestCancel);
 
+      AddProc('Write FormData', ExampleWriteFormData);
       AddProc('Read FormData', ExampleReadFormData);
 
       AddProc('SmallBuffer: read write line with small buffer', ExampleSmallBuffer);

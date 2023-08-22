@@ -20,6 +20,7 @@ unit mnStreams;
   Rules:
 
     if stream read 0 byte but it is not eof , it mean `retry` or `timeout`
+    remove retry in future
 }
 
 interface
@@ -180,6 +181,8 @@ type
     constructor Create(AStream: TmnBufferStream);
   end;
 
+  TReadUntilCallback = procedure(vData: TObject; const Buffer; Count: Longint) of object;
+
   { TmnBufferStream }
 
   TmnBufferStream = class(TmnCustomStream)
@@ -229,6 +232,7 @@ type
     procedure Close(ACloseWhat: TmnStreamClose = [cloRead, cloWrite]);
 
     //* ABuffer is created you need to free it
+    function ReadUntilCallback(vData: TObject; const Match: PByte; MatchSize: Word; ExcludeMatch: Boolean; Callback: TReadUntilCallback; out Matched: Boolean): Boolean;
     function ReadBufferUntil(const Match: PByte; MatchSize: Word; ExcludeMatch: Boolean; out ABuffer: PByte; out ABufferSize: TFileSize; out Matched: Boolean): Boolean;
     {$ifndef NEXTGEN}
     function ReadUntil(const Match: ansistring; ExcludeMatch: Boolean; out Buffer: ansistring; out Matched: Boolean): Boolean; overload;
@@ -238,6 +242,7 @@ type
     function ReadLine(ExcludeEOL: Boolean = True): string; overload;
     function ReadLine(out S: utf8string; ExcludeEOL: Boolean = True): Boolean; overload;
     function ReadLineUTF8(out S: utf8string; ExcludeEOL: Boolean = True): Boolean; overload;
+    function ReadLineUTF8(out S: string; ExcludeEOL: Boolean = True): Boolean; overload;
     function ReadLineUTF8(ExcludeEOL: Boolean = True): UTF8String; overload;
     function ReadLine(out S: unicodestring; ExcludeEOL: Boolean = True): Boolean; overload;
 
@@ -599,7 +604,10 @@ end;
 
 function TmnConnectionStream.WaitToRead: Boolean;
 begin
-  Result := WaitToRead(ReadTimeout) = cerSuccess;
+  if Connected then
+    Result := WaitToRead(ReadTimeout) = cerSuccess
+  else
+    Result := False;
 end;
 
 function TmnConnectionStream.WaitToWrite: Boolean;
@@ -1116,6 +1124,14 @@ begin
   FreeMem(res);
 end;
 
+function TmnBufferStream.ReadLineUTF8(out S: string; ExcludeEOL: Boolean): Boolean;
+var
+  u8: UTF8String;
+begin
+  Result := ReadLineUTF8(u8, ExcludeEOL);
+  S := u8;
+end;
+
 function TmnBufferStream.WriteLine: TFileSize;
 begin
   if EndOfLine <> '' then
@@ -1313,7 +1329,6 @@ end;
 function TmnBufferStream.ReadBufferUntil(const Match: PByte; MatchSize: Word; ExcludeMatch: Boolean; out ABuffer: PByte; out ABufferSize: TFileSize; out Matched: Boolean): Boolean;
 var
   aCount: Integer;
-  aBuf: TBytes;
 
   function _IsMatch(vBI, vMI: Integer; out vErr: Boolean): Boolean;
   var
@@ -1429,6 +1444,100 @@ begin
   Result := ReadBufferUntil(@Match[1], Length(Match), ExcludeMatch, Res, Len, Matched);
   CopyWideString(Buffer, Res, Len);
   FreeMem(Res);
+end;
+
+
+function TmnBufferStream.ReadUntilCallback(vData: TObject; const Match: PByte; MatchSize: Word; ExcludeMatch: Boolean; Callback: TReadUntilCallback; out Matched: Boolean): Boolean;
+var
+  aCount: Integer;
+  aBuf: TBytes;
+  aSize: Integer;
+
+  function _IsMatch(vBI, vMI: Integer; out vErr: Boolean): Boolean;
+  var
+    b: Byte;
+    t: PByte;
+  begin
+    if vBI >= aCount then
+    begin
+      vErr := Read(b, 1)<>1; { TODO : find way to improve this }
+
+      if not vErr then
+      begin
+        if aCount=aSize then
+        begin
+          aSize := aSize + ReadWriteBufferSize;
+          SetLength(aBuf, aSize);
+        end;
+        t := PByte(aBuf);
+        Inc(t, aCount);
+        t^ := b;
+        Inc(aCount);
+      end;
+    end
+    else
+      vErr := False;
+
+    if not vErr then
+      Result := aBuf[vBI] = Match[vMI]
+    else
+      Result := False;
+  end;
+
+const
+  sSize = 1024;
+
+var
+  P: PByte;
+  mt: PByte;
+  Index: Integer;
+  MatchIndex: Integer;
+  aErr: Boolean;
+begin
+  if (Match = nil) or (MatchSize = 0) then
+    raise Exception.Create('Match is empty!');
+
+  Result := not (cloRead in Done);
+  Matched := False;
+
+  aCount := 0;
+  Index := 0;
+  MatchIndex := 0;
+  aSize := sSize;
+  SetLength(aBuf, sSize);
+
+  while not Matched do
+  begin
+    if _IsMatch(Index + MatchIndex, MatchIndex, aErr) then
+    begin
+      Inc(MatchIndex);
+      if MatchIndex = MatchSize then
+      begin
+        Matched := True;
+      end;
+    end
+    else
+    begin
+      MatchIndex := 0;
+      Inc(Index);
+      if aErr  then
+        Break
+      else if (Index>=sSize) then
+      begin
+        Callback(vData, PByte(aBuf), aCount);
+        aCount := 0;
+        Index := 0;
+      end;
+    end;
+  end;
+
+  if ExcludeMatch and Matched then
+    aCount := aCount - MatchSize;
+
+  Callback(vData, PByte(aBuf), aCount);
+
+  if not Matched and (cloRead in Done) and (aSize = 0) then
+    Result := False;
 end;
 
 {$endif}
