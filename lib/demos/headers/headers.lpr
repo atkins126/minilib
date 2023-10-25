@@ -1,4 +1,4 @@
-program arguments;
+program header;
 
 {$mode objfpc}{$H+}
 
@@ -11,9 +11,9 @@ uses
 
 type
 
-  { TMyArguments }
+  { TMyApp }
 
-  TMyArguments = class(TCustomApplication)
+  TMyApp = class(TCustomApplication)
   protected
     procedure DoRun; override;
   public
@@ -23,7 +23,7 @@ type
     procedure WriteHelp; virtual;
   end;
 
-procedure TMyArguments.DoRun;
+procedure TMyApp.DoRun;
 begin
   inherited DoRun;
   RunTest;
@@ -31,28 +31,28 @@ begin
   Terminate;
 end;
 
-constructor TMyArguments.Create(TheOwner: TComponent);
+constructor TMyApp.Create(TheOwner: TComponent);
 begin
   inherited Create(TheOwner);
   StopOnException :=True;
 end;
 
-destructor TMyArguments.Destroy;
+destructor TMyApp.Destroy;
 begin
   inherited Destroy;
 end;
 
-procedure TMyArguments.WriteHelp;
+procedure TMyApp.WriteHelp;
 begin
   { add your help code here }
   writeln('Usage: ', ExeName, ' -h');
 end;
 
 var
-  Application: TMyArguments;
+  Application: TMyApp;
 begin
-  Application :=TMyArguments.Create(nil);
-  Application.Title :='Arguments';
+  Application :=TMyApp.Create(nil);
+  Application.Title :='Headers';
   Application.Run;
   ReadLn();
   Application.Free;

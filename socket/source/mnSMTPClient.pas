@@ -8,6 +8,7 @@ unit mnSMTPClient;
   *
   * Ref:
   *   https://www.samlogic.net/articles/smtp-commands-reference.htm
+  *   https://en.wikipedia.org/wiki/SMTP_Authentication
   * }
 
 {$H+}{$M+}
@@ -74,7 +75,7 @@ type
     function ReadRespond(Respond: TStringList = nil): Integer;
     function ReadRespondLine(out S: string): Integer;
     function ReadLine(out s: String): Boolean;
-    procedure WriteLine(s: Utf8String);
+    procedure WriteLine(s: string);
     procedure WriteCommand(Command: string; s: String = '');
   public
     constructor Create;
@@ -132,13 +133,15 @@ var
   C: Char;
   Count: Integer;
 begin
+  Result := False;
+
   if S = '' then
-    Exit(False);
+    Exit;
 
   Count := 1;
   for C in S do
   begin
-    if C in [' ', '-'] then
+    if CharInSet(C, [' ', '-']) then
     begin
       Separator := C;
       Result := True;
@@ -189,7 +192,7 @@ begin
     SMTPClient.UserName := aUserMail;
     SMTPClient.Password := vPassword;
     SMTPClient.UseSSL := UseSSL;
-    SMTPClient.SendMail(vFrom, vTo, vSubject, vBody);
+    Result := SMTPClient.SendMail(vFrom, vTo, vSubject, vBody);
   finally
     SMTPClient.Free;
   end;
@@ -323,7 +326,7 @@ begin
     WriteLine(Command)
 end;
 
-procedure TmnCustomSMTPClient.WriteLine(s: Utf8String);
+procedure TmnCustomSMTPClient.WriteLine(s: string);
 begin
   FStream.WriteLineUTF8(s);
   Log.Writeln('<= '+s);
@@ -399,7 +402,7 @@ var
     s: UTF8String;
   begin
     s := Utf8Char(0) + Username + Utf8Char(0) + Password;
-    WriteLine('AUTH PLAIN ' + Base64Encode(s));
+    WriteCommand('AUTH', 'PLAIN ' + Base64Encode(s));
     FAuthenticated := ReadRespond = 235;
   end;
 
@@ -477,7 +480,17 @@ begin
             else if SameText(s, 'PLAIN') then
               AuthPlain;
 {              if SameText(s, 'CRAM-MD5') then
-              AuthCramMD5}
+              AuthCramMD5
+    PLAIN (Uses Base64 encoding)
+    LOGIN (Uses Base64 encoding)[11] (obsoleted in favor of PLAIN)
+    GSSAPI (Generic Security Services Application Program Interface)
+    DIGEST-MD5 (Digest access authentication)
+    MD5
+    CRAM-MD5
+    OAUTH10A (OAuth 1.0a HMAC-SHA1 tokens as defined in RFC 5849)
+    OAUTHBEARER (OAuth 2.0 bearer tokens as defined in RFC 6750)
+    XOAUTH2 [12]
+              }
 
             if FAuthenticated then
               break;
@@ -571,7 +584,7 @@ begin
       Result := ReadRespond = 250;
 
       WriteCommand('QUIT');
-      Result := ReadRespond = 221;
+      Result := Result and (ReadRespond = 221);
     end;
   end;
 end;

@@ -50,8 +50,8 @@ type
     hrNone,
     hrOK,
     hrError,
-    hrMovedTemporarily, //307
     hrFound, //302
+    hrMovedTemporarily, //307
     hrNotFound,
     hrSwitchingProtocols,
     hrServiceUnavailable
@@ -69,7 +69,6 @@ type
     FContentLength: Integer;
     FCompressClass: TmnCompressStreamProxyClass;
     FCompressProxy: TmnCompressStreamProxy;
-    FCookies: TmnParams;
     FRoot: string; //Document root folder
     FHost: string;
     FHttpResult: THttpResult;
@@ -82,7 +81,6 @@ type
   public
     constructor Create;
     destructor Destroy; override;
-    property Cookies: TmnParams read FCookies;
     property KeepAlive: Boolean read FKeepAlive write FKeepAlive;
     //Compress on the fly, now we use deflate
     property ContentLength: Integer read FContentLength write FContentLength;
@@ -143,9 +141,8 @@ type
 
     procedure Log(S: string); override;
     procedure InternalError(ARequest: TmodRequest; ARequestStream: TmnBufferStream; ARespondStream: TmnBufferStream; var Handled: Boolean); override;
-    procedure ParseHead(ARequest: TmodRequest); override;
-
-
+    procedure DoMatch(const ARequest: TmodRequest; var vMatch: Boolean); override;
+    procedure DoPrepareRequest(ARequest: TmodRequest); override;
   public
     destructor Destroy; override;
     property DocumentRoot: string read FDocumentRoot write SetDocumentRoot;
@@ -218,6 +215,12 @@ type
     procedure RespondResult(var Result: TmodRespondResult); override;
   end;
 
+  //handle cors :)
+  TmodHttpOptionCommand = class(TmodHttpGetCommand)
+  public
+    procedure RespondResult(var Result: TmodRespondResult); override;
+  end;
+
   { TmodPutCommand }
 
   TmodPutCommand = class(TmodURICommand)
@@ -253,7 +256,26 @@ type
 var
   modLock: TCriticalSection = nil;
 
+function WebExpandToRoot(FileName: string; Root: string): string;
+
 implementation
+
+function WebExpandToRoot(FileName: string; Root: string): string;
+begin
+  if (FileName <> '') then
+  begin
+    if StartsStr('../', FileName) or StartsStr('..\', FileName) then
+      Result := ExpandFileName(IncludePathDelimiter(Root) + FileName)
+    else if StartsStr('./', FileName) or StartsStr('.\', FileName) then
+      Result := IncludePathDelimiter(Root) + Copy(FileName, 3, MaxInt)
+    else if StartsDelimiter(FileName) then
+      Result := IncludePathDelimiter(Root) + Copy(FileName, 2, MaxInt)
+    else
+      Result := IncludePathDelimiter(Root) + FileName;
+  end
+  else
+    Result := '';
+end;
 
 //TODO slow function needs to improvements
 //https://stackoverflow.com/questions/1549213/whats-the-correct-encoding-of-http-get-request-strings
@@ -319,14 +341,12 @@ end;
 constructor TmodHttpRespond.Create;
 begin
   inherited Create;
-  FCookies := TmnParams.Create;
-  FCookies.Delimiter := ';';
   FHttpResult := hrNone;
 end;
 
 destructor TmodHttpRespond.Destroy;
 begin
-  FreeAndNil(FCookies);
+
   inherited Destroy;
 end;
 
@@ -349,8 +369,6 @@ end;
 procedure TmodHttpRespond.DoSendHeader;
 begin
   inherited;
-  if Cookies.Count > 0 then
-    AddHeader('Cookies', Cookies.AsString);
 end;
 
 function TmodHttpRespond.HeadText: string;
@@ -389,6 +407,7 @@ end;
 procedure TmodWebModule.SetDocumentRoot(AValue: string);
 begin
   if FDocumentRoot =AValue then Exit;
+
   FDocumentRoot :=AValue;
 end;
 
@@ -414,6 +433,7 @@ end;
 procedure TmodWebModule.DoCreateCommands;
 begin
   inherited;
+  //use post and get as same command
   RegisterCommand('GET', TmodHttpGetCommand, true);
   //RegisterCommand('GET', TmodHttpPostCommand, true);
   RegisterCommand('POST', TmodHttpPostCommand, true);
@@ -424,6 +444,21 @@ begin
   RegisterCommand('DIR', TmodDirCommand);
   RegisterCommand('DEL', TmodDeleteFileCommand);
   }
+end;
+
+procedure TmodWebModule.DoPrepareRequest(ARequest: TmodRequest);
+begin
+  //inherited;
+
+  ARequest.Command := ARequest.Method;
+  ARequest.Path := Copy(ARequest.Address, Length(ARequest.Route[0]) + 1, MaxInt);
+end;
+
+procedure TmodWebModule.DoMatch(const ARequest: TmodRequest; var vMatch: Boolean);
+begin
+  //inherited;
+
+  vMatch := ARequest.Route[0] = AliasName;
 end;
 
 procedure TmodWebModule.InternalError(ARequest: TmodRequest; ARequestStream, ARespondStream: TmnBufferStream; var Handled: Boolean);
@@ -444,12 +479,6 @@ procedure TmodWebModule.Log(S: string);
 begin
   inherited;
   Modules.Log(S);
-end;
-
-procedure TmodWebModule.ParseHead(ARequest: TmodRequest);
-begin
-  inherited;
-  ARequest.Command := ARequest.Method;
 end;
 
 { TmodURICommand }
@@ -578,23 +607,27 @@ begin
 *)
 
 
-  aRoot := IncludeTrailingPathDelimiter(Respond.Root);
-  aDocument := aRoot;
+  aRoot := ExcludePathDelimiter(Respond.Root);
 
-  if Request.Path <> '' then
-    aDocument := aDocument + '.\' + Request.Path;
-  aDocument := StringReplace(aDocument, '/', PathDelim, [rfReplaceAll]);//correct it for linux
-  if EndsText(PathDelim, aDocument) then //get the default file if it not defined
-     aDocument := GetDefaultDocument(aDocument);
 
-  aRoot := ExpandFileName(aRoot);
+  if (Request.Path = '') or StartsDelimiter(Request.Path) or StartsStr('.', Request.Path) then
+    aDocument := aRoot + Request.Path
+  else
+    aDocument := aRoot + '\' +Request.Path;
+
   aDocument := ExpandFileName(aDocument);
 
-  if not StartsStr(aRoot, aDocument) then //check if not out of root :)
+
+  aDocument := StringReplace(aDocument, '/', PathDelim, [rfReplaceAll]);//correct it for linux
+
+  if EndsDelimiter(aDocument) then //get the default file if it not defined
+     aDocument := GetDefaultDocument(aDocument);
+
+  if not StartsStr(aRoot, aDocument) then //check if out of root :)
   begin
     Respond.HttpResult := hrError;
   end
-  else if ((Request.Path = '') and not FileExists(aDocument)) or (not EndsText(PathDelim, aDocument) and DirectoryExists(aDocument)) then
+  else if ((Request.Path = '') and not FileExists(aDocument)) or (not EndsDelimiter(aDocument) and DirectoryExists(aDocument)) then
   begin
     //http://127.0.0.1:81
     //http://127.0.0.1:81/
@@ -730,7 +763,6 @@ var
   Key: string;
 begin
   inherited;
-  ParseQuery(Request.Query, Request.Params);
 
   //* https://developer.mozilla.org/en-US/docs/Web/API/WebSockets_API/Writing_WebSocket_servers
   Key := Request.Header.ReadString('Sec-WebSocket-Key');
@@ -864,6 +896,23 @@ begin
   RegisterCommand('Event', TmodHttpEventCommand, true);
 end;
 {$endif FPC}
+
+{ TmodHttpOptionCommand }
+
+procedure TmodHttpOptionCommand.RespondResult(var Result: TmodRespondResult);
+begin
+  inherited;
+  Respond.HttpResult := hrOK;
+  Respond.PutHeader('Allow', 'OPTIONS, GET, HEAD, POST');
+  //PutHeader('Access-Control-Allow-Origin', 'origin');
+//  PutHeader('Access-Control-Allow-Headers', 'Origin, Accept, Accept-  Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, X-Response-Time, X-PINGOTHER, X-CSRF-Token,Authorization');
+//  PutHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+  Respond.PutHeader('server', 'cserp.web.service/v1');
+  Respond.PutHeader('Access-Control-Allow-Origin', '*');
+  Respond.PutHeader('Access-Control-Allow-Method', 'POST');
+  Respond.PutHeader('Access-Control-Allow-Headers', 'X-PINGOTHER, Content-Type');
+
+end;
 
 initialization
   modLock := TCriticalSection.Create;

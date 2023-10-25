@@ -12,6 +12,7 @@ unit mnUtils;
 {$modeswitch arrayoperators}
 {$ModeSwitch advancedrecords}
 {$ModeSwitch typehelpers}
+{$RangeChecks+}
 {$ENDIF}
 {$M+}{$H+}
 
@@ -87,20 +88,23 @@ function StrScanTo(Content: string; FromIndex: Integer; out S: string; out CharI
 }
 type
   TParseArgumentsOptions = set of (
-    pargSmartSwitch
+    pargKeepSwitch,
+    pargDeqoute,
+    pargTrim, //TODO
+    pargValues //without name=value consider it as value
   );
 
 //*  -t --test cmd1 cmd2 -t: value -t:value -t value
-function ParseArgumentsCallback(Content: string; const CallBackProc: TArgumentsCallbackProc; Sender: Pointer; Switches: TArray<Char>; WhiteSpaces: TArray<Char> {= [' ', #9]}; Quotes: TArray<Char> {= ['''', '"']};  ValueSeperators: TArray<Char> {= [':', '=']}; Options: TParseArgumentsOptions = [pargSmartSwitch]): Integer; overload;
-function ParseArgumentsCallback(Content: string; const CallBackProc: TArgumentsCallbackProc; Sender: Pointer): Integer; overload;
+function ParseArgumentsCallback(const Content: string; const CallBackProc: TArgumentsCallbackProc; Sender: Pointer; Switches: TArray<Char>{['-', '/']}; Options: TParseArgumentsOptions = [pargKeepSwitch, pargDeqoute]; Terminals: TSysCharSet = [' ', #9]; WhiteSpaces: TSysCharSet = [' ', #9]; Quotes: TSysCharSet = ['''', '"'];  ValueSeperators: TSysCharSet = [':', '=']): Integer; overload;
 
 //*
-function ParseArguments(Content: string; Strings: TStrings; Switches: TArray<Char>; WhiteSpaces: TArray<Char>{ = [' ', #9]}; Quotes: TArray<Char> {= ['''', '"']}; ValueSeperators: TArray<Char> {= [':', '=']}): Integer; overload;
-function ParseArguments(Content: string; Strings: TStrings): Integer; overload;
+function ParseArguments(const Content: string; Strings: TStrings; Switches: TArray<Char>; Options: TParseArgumentsOptions = [pargKeepSwitch, pargDeqoute]; Terminals: TSysCharSet = [' ', #9]; WhiteSpaces: TSysCharSet = [' ', #9]; Quotes: TSysCharSet = ['''', '"'];  ValueSeperators: TSysCharSet = [':', '=']): Integer; overload;
 
 //* Skip first param
-function ParseCommandLine(Content: string; Strings: TStrings; Switches: TArray<Char>; WhiteSpaces: TArray<Char>{ = [' ', #9]}; Quotes: TArray<Char> {= ['''', '"']}; ValueSeperators: TArray<Char> {= [':', '=']}): Integer; overload;
-function ParseCommandLine(Content: string; Strings: TStrings): Integer; overload;
+function ParseCommandLine(Content: string; Strings: TStrings; Switches: TArray<Char>; WhiteSpaces: TSysCharSet = [' ', #9]; Quotes: TSysCharSet = ['''', '"'];  ValueSeperators: TSysCharSet = [':', '=']): Integer; overload;
+
+function GetSubValue(const Content, Name: string; out Value: string; Terminals: TSysCharSet = [';']; WhiteSpaces: TSysCharSet = [' ',#9]; Quotes: TSysCharSet = ['"']; ValueSeperators: TSysCharSet = ['=']): Boolean; overload;
+
 
 {
   param1 param2 -s -w: value
@@ -126,7 +130,8 @@ function CompareLeftStr(const Str: string; const WithStr: string; Start: Integer
 function ContainsText(const SubStr, InStr: string): Boolean; deprecated 'Use StrUtils.ContainsText and swap params';
 
 //Same as Copy/MidStr but From To index
-function CopyStr(const AText: String; const AFromIndex, AToIndex: Integer): String; overload;
+//function CopyStr(const AText: String; const AFromIndex, AToIndex: Integer): String; overload; deprecated;
+function SubStr(const AText: String; AFromIndex, AToIndex: Integer): String; overload;
 {
   Index started from 0
 }
@@ -140,7 +145,8 @@ function FetchStr(var AInput: string; const ADelim: string = '.'; const ADelete:
 
 function StrInArray(const Str: String; const InArray : Array of String; CaseInsensitive: Boolean = False) : Boolean; overload;
 function StrInArray(const Str: string; const StartIndex: Integer; const InArray: array of string; out SepLength: Integer; CaseInsensitive: Boolean = False): Boolean; overload;
-function CharInArray(const C: string; const ArrayOfChar : array of Char; CaseInsensitive: Boolean = False) : Boolean;
+function CharInArray(const C: Char; const ArrayOfChar : array of Char; CaseInsensitive: Boolean = False) : Boolean;
+function CharArrayToSet(const ArrayOfChar : TArray<Char>) : TSysCharSet;
 
 //vPeriod is a datetime not tickcount
 function PeriodToString(vPeriod: Double; WithSeconds: Boolean): string;
@@ -192,6 +198,9 @@ function AlignStr(const S: string; Count: Integer; Options: TAlignStrOptions = [
 }
 function ExpandToPath(FileName: string; Path: string; Root: string = ''): string;
 
+function StartsDelimiter(const vFileName: string): Boolean;
+function EndsDelimiter(const vFileName: string): Boolean;
+
 {
   EscapeString: Example
     EscapeString(Text, '\', [#13, #10, #9 , #8, '"'], ['r', 'n', 't', 'b', '"']);
@@ -224,9 +233,8 @@ function ToUnixPathDelimiter(const S: string): string;
 
 //IncludePathDelimiter add the Delimiter when S not = ''
 function IncludePathDelimiter(const S: string): string;
-function IncludePathSeparator(const S: string): string; deprecated 'Use IncludePathDelimiter';
-function IncludeURLDelimiter(S: string): string;
 function ExcludePathDelimiter(Path: string): string;
+function IncludeURLDelimiter(S: string): string;
 
 //Similer to ZeroMemory
 procedure InitMemory(out V; Count: {$ifdef FPC}SizeInt{$else}Longint{$endif});
@@ -276,10 +284,17 @@ type
   //If set Resume to false it will stop loop
   TEnumFilesCallback = procedure(AObject: TObject; const FileName: string; Count, Level:Integer; IsDirectory: Boolean; var Resume: Boolean);
 
-procedure EnumFiles(FileList: TStringList; Folder, Filter: string; Options: TEnumFilesOptions = [efFile]); overload;
-function FirstFile(Path, Files: string): string;
-function DeleteFiles(Path, Files: string): Integer;
+procedure EnumFiles(FileList: TStrings; const Folder, Filter: string; Options: TEnumFilesOptions = [efFile]); overload;
+function FirstFile(const Path, Files: string): string;
+function DeleteFiles(const Path, Files: string): Integer;
 function GetSizeOfFile(const vFile: string): Int64; //GetFileSize
+
+//mnMulDiv not using windows unit
+function mnMulDiv(nNumber, nNumerator, nDenominator: Integer): Integer; overload;
+function mnMulDiv(nNumber, nNumerator, nDenominator: Int64): Int64; overload;
+//propblem round(10.5) -> 10
+function mnRound(nNumber: Double): Int64; overload;
+
 
 var
   SystemAnsiCodePage: Cardinal; //used to convert from Ansi string, it is the default
@@ -797,7 +812,7 @@ begin
   TStrings(Sender).Add(S); //Be sure sender is TStrings
 end;
 
-function StrToStringsEx(Content: string; Strings: TStrings; Separators: Array of string; IgnoreInitialWhiteSpace: TSysCharSet = [' ']; Quotes: TSysCharSet = ['''', '"']): Integer; overload;
+function StrToStringsEx(Content: string; Strings: TStrings; Separators: array of string; IgnoreInitialWhiteSpace: TSysCharSet; Quotes: TSysCharSet): Integer;
 var
   MatchCount: Integer;
 begin
@@ -839,12 +854,50 @@ begin
   NextIndex := r.NextIndex;
 end;
 
+type
+  TSubStrResult = record
+    Name: string;
+    Value: string;
+    Found: Boolean;
+  end;
+
+procedure GetSubValueCallbackProc(Sender: Pointer; Index: Integer; AName, AValue: string; IsSwitch: Boolean; var Resume: Boolean);
+var
+  p: ^TSubStrResult;
+begin
+  p := Sender;
+
+  if (AName = p.Name) then
+  begin
+    p.Value := AValue;
+    p.Found := True;
+    Resume := False;
+  end
+end;
+
+function GetSubValue(const Content, Name: string; out Value: string; Terminals: TSysCharSet; WhiteSpaces: TSysCharSet; Quotes: TSysCharSet; ValueSeperators: TSysCharSet): Boolean;
+var
+  r: TSubStrResult;
+begin
+  r.Found := False;
+  r.Name := Name;
+  r.Value := Name;
+
+  ParseArgumentsCallback(Content, @GetSubValueCallbackProc, @r, [], [pargDeqoute], Terminals, WhiteSpaces, Quotes, ValueSeperators);
+
+  Value := r.Value;
+  Result := r.Found;
+end;
+
+
 {function StrToStringsEx(Content: string; Strings: TStrings; IgnoreInitialWhiteSpace: TSysCharSet = [' ']; Quotes: TSysCharSet = ['''', '"']): Integer; overload;
 begin
   Result := StrToStringsEx(Content, Strings, [#13, #10, #0], IgnoreInitialWhiteSpace, Quotes);
 end;}
 
-function ParseArgumentsCallback(Content: string; const CallBackProc: TArgumentsCallbackProc; Sender: Pointer; Switches: TArray<Char>; WhiteSpaces: TArray<Char>; Quotes: TArray<Char>; ValueSeperators: TArray<Char>; Options: TParseArgumentsOptions): Integer;
+function ParseArgumentsCallback(const Content: string; const CallBackProc: TArgumentsCallbackProc; Sender: Pointer; Switches: TArray<Char>; Options: TParseArgumentsOptions; Terminals: TSysCharSet; WhiteSpaces: TSysCharSet; Quotes: TSysCharSet; ValueSeperators: TSysCharSet): Integer;
+type
+  TParseState = (stName, stAssign, stValue);
 var
   Start, Cur: Integer;
   Resume: Boolean;
@@ -853,147 +906,140 @@ var
   Value: string;
   QuoteChar: Char;
   S: string;
-  NextIsValue: Boolean;
+  State: TParseState;
   IsSwitch: Boolean;
+  l: Integer;
 begin
+  if (@CallBackProc = nil) then
+    raise Exception.Create('ParseArguments: CallBackProc is nil');
+
   IsSwitch := False;
   Result := 0;
   Index := 0;
   Name := '';
   Value := '';
-  NextIsValue := False;
-  if (@CallBackProc = nil) then
-    raise Exception.Create('ParseArguments: CallBackProc is nil');
-  if (Content <> '') then
-  begin
-    Cur := 1;
-    repeat
-      //bypass white spaces
-      while (Cur <= Length(Content)) and CharInArray(Content[Cur], WhiteSpaces) do
-        Cur := Cur + 1;
+  State := stName;
 
-      //start from the first char
-      Start := Cur - 1;
-      QuoteChar := #0;
+  if (Content = '') then
+    Exit(0);
 
-      if (Cur <= Length(Content)) and CharInArray(Content[Cur], Quotes) then
+  Cur := 0;
+  repeat
+    Cur := Cur + 1;
+    //bypass white spaces
+    while (Cur <= Length(Content)) and CharInSet(Content[Cur], WhiteSpaces) do
+      Cur := Cur + 1;
+
+    //start from the first char
+    Start := Cur;
+    QuoteChar := #0;
+
+    while True do
+    begin
+      if (Cur > Length(Content)) then
+        break
+      else if (QuoteChar = #0) and CharInSet(Content[Cur], Quotes) then
+        QuoteChar := Content[Cur]
+      else if (QuoteChar <> #0) then
       begin
-        QuoteChar := Content[Cur];
-        Cur := Cur + 1;
+        if (Content[Cur] = QuoteChar) then
+          QuoteChar := #0;
+      end
+      else if CharInSet(Content[Cur], Terminals) then
+        break
+      //* if you removed -t:value will break
+      else if (State = stName) and CharInSet(Content[Cur], ValueSeperators) then
+      begin
+        State := stAssign;
+        break;
+      end;
+      Cur := Cur + 1;
+    end;
+
+    if (Cur >= Start) then
+    begin
+      l := Cur - Start;
+
+      if l = 0 then
+        S := ''
+      else
+      begin
+        if (pargDeqoute in Options) and CharInSet(Content[Start], Quotes) and (Content[Start] = Content[Start + l - 1]) then
+          S := Copy(Content, Start + 1, l - 2)
+        else
+          S := Copy(Content, Start, l);
       end;
 
-      while (Cur <= Length(Content)) and (not CharInArray(Content[Cur], WhiteSpaces) or (QuoteChar <> #0)) do
+      if State = stValue then
       begin
-        if (QuoteChar <> #0) then
-        begin
-          if (Content[Cur] = QuoteChar) then
-          begin
-            Cur := Cur + 1;
-            break;
-          end;
-        end
-        //* if you removed -t:value will break
-        else if not NextIsValue and CharInArray(Content[Cur], ValueSeperators) then
-        begin
-          Cur := Cur + 1;
-          break;
-        end;
-
-        Cur := Cur + 1;
+        Value := S;
+        State := stName;
+      end
+      else
+      begin
+        Name := S;
+        Value := '';
+        if State = stAssign then
+          State := stValue
+        else
+          State := stName;
       end;
 
-      if (Cur >= Start) then
+      if State = stName then
       begin
-        S := Copy(Content, Start + 1, Cur - Start - 1);
-        if S <> '' then
+        Resume := True;
+        if (Name<>'') and CharInArray(Name[1], Switches) then
         begin
-          if NextIsValue then
+          IsSwitch := True;
+
+          if pargKeepSwitch in Options then
           begin
-{            if CharInArray(S[1], Switches) then //* hmmm maybe not //nop, what if i want value is minus
-              raise Exception.Create('Value excepted not a switch '+ S);}
-            Value := S;
-            NextIsValue := False;
+            if (Length(Name)>1) and (Name[1] = Name[2]) then
+              Name := Copy(Name, 2, Length(Name)); //change double switch to one switch
+
+            if Name[1] <> Switches[0] then //should be first element in Switches, convert / to -
+              Name[1] := Switches[0];
           end
           else
           begin
-            Name := S;
-            Value := '';
-            if {CharInArray(Name[1], Switches) and } CharInArray(Name[Length(Name)], ValueSeperators) then
-            begin
-              Name := Copy(Name, 1, Length(Name) -1);
-              { no i want to pass platform=win32 without switch char -
-              if not CharInArray(Name[1], Switches) then
-                Name := Switches[0] + Name;}
-              NextIsValue := True;
-            end
+            if (Length(Name)>1) and (Name[1] = Name[2]) then
+              Name := Copy(Name, 3, Length(Name)) //change double switch to one switch
             else
-              NextIsValue := False;
+              Name := Copy(Name, 2, Length(Name));
           end;
+        end;
+        //run2.exe  name=value "name"=value name="value" "name=value"
+        if (Value='') and not IsSwitch and (pargValues in Options) then
+          CallBackProc(Sender, Index, '', Name, IsSwitch, Resume)
+        else
+          CallBackProc(Sender, Index, Name, Value, IsSwitch, Resume);
 
-          if not NextIsValue then
-          begin
-            Resume := True;
-            if CharInArray(Name[1], Switches) then
-            begin
-              IsSwitch := True;
-              if pargSmartSwitch in Options then
-              begin
-                if (Name[1] = Name[2]) then
-                  Name := Copy(Name, 3, Length(Name)) //change double switch to one switch
-                else
-                  Name := Copy(Name, 2, Length(Name));
-              end
-              else
-              begin
-                if (Name[1] = Name[2]) then
-                  Name := Copy(Name, 2, Length(Name)); //change double switch to one switch
-                if Name[1] <> Switches[0] then //should be first element in Switches, but i cant convert it to array right now
-                  Name[1] := Switches[0];
-              end;
-            end;
-            CallBackProc(Sender, Index, DequoteStr(Name), DequoteStr(Value), IsSwitch, Resume);
-            IsSwitch := False;
-            Index := Index + 1;
-            Inc(Result);
-            if not Resume then
-              break;
-          end;
-         end;
+        IsSwitch := False;
+        Index := Index + 1;
+        Inc(Result);
+
+        if not Resume then
+          break;
       end;
-      //Cur := Cur + 1;
-    until Cur > Length(Content);
-  end;
+
+    end
+  until Cur > Length(Content);
 end;
 
 procedure ArgumentsCallbackProc(Sender: Pointer; Index: Integer; AName, AValue: string; IsSwitch: Boolean; var Resume: Boolean);
 begin
   with TObject(Sender) as TStrings do
   begin
-    if (AName <> '') and (AValue = '') then
-    begin
-      if IsSwitch then
-        Add(AName + NameValueSeparator)
-      else
-        Add(NameValueSeparator + AName)
-    end
+    if AValue <> '' then
+      Add(AName + NameValueSeparator + AValue)
     else
-      Add(AName + NameValueSeparator + AValue);
+      Add(AName);
   end;
 end;
 
-function ParseArgumentsCallback(Content: string; const CallBackProc: TArgumentsCallbackProc; Sender: Pointer): Integer; overload;
+function ParseArguments(const Content: string; Strings: TStrings; Switches: TArray<Char>; Options: TParseArgumentsOptions; Terminals: TSysCharSet; WhiteSpaces: TSysCharSet; Quotes: TSysCharSet; ValueSeperators: TSysCharSet): Integer;
 begin
-  Result := ParseArgumentsCallback(Content, @CallBackProc, Sender, ['-', '/'], [' ', #9], ['"', ''''], ['=', ':']);
-end;
-
-function ParseArguments(Content: string; Strings: TStrings; Switches: TArray<Char>; WhiteSpaces: TArray<Char>; Quotes: TArray<Char>; ValueSeperators: TArray<Char>): Integer;
-begin
-  Result := ParseArgumentsCallback(Content, @ArgumentsCallbackProc, Strings, Switches, WhiteSpaces, Quotes, ValueSeperators);
-end;
-
-function ParseArguments(Content: string; Strings: TStrings): Integer;
-begin
-  Result := ParseArguments(Content, Strings, ['-', '/'], [' ', #9], ['"', ''''], ['=', ':']);
+  Result := ParseArgumentsCallback(Content, @ArgumentsCallbackProc, Strings, Switches, Options, Terminals, WhiteSpaces, Quotes, ValueSeperators);
 end;
 
 procedure CommandLineCallbackProc(Sender: Pointer; Index: Integer; Name, Value: string; IsSwitch: Boolean; var Resume: Boolean);
@@ -1002,14 +1048,9 @@ begin
     ArgumentsCallbackProc(Sender, Index, Name, Value, IsSwitch, Resume);
 end;
 
-function ParseCommandLine(Content: string; Strings: TStrings; Switches: TArray<Char>; WhiteSpaces: TArray<Char>; Quotes: TArray<Char>; ValueSeperators: TArray<Char>): Integer;
+function ParseCommandLine(Content: string; Strings: TStrings; Switches: TArray<Char>; WhiteSpaces: TSysCharSet; Quotes: TSysCharSet; ValueSeperators: TSysCharSet): Integer;
 begin
-  Result := ParseArgumentsCallback(Content, @CommandLineCallbackProc, Strings, Switches, WhiteSpaces, Quotes, ValueSeperators);
-end;
-
-function ParseCommandLine(Content: string; Strings: TStrings): Integer;
-begin
-  Result := ParseCommandLine(Content, Strings, ['-', '/'], [' ', #9], ['"', ''''], ['=', ':']);
+  Result := ParseArgumentsCallback(Content, @CommandLineCallbackProc, Strings, Switches, [pargKeepSwitch, pargDeqoute], WhiteSpaces, WhiteSpaces, Quotes, ValueSeperators);
 end;
 
 function GetArgumentValue(Strings: TStrings; out Value: String; Switch: string; AltSwitch: string = ''): Boolean;
@@ -1046,15 +1087,15 @@ begin
     S := Strings[I];
     P := Pos(Strings.NameValueSeparator, S);
     if (P <> 0) then
-    begin
-      if (SameText(Copy(S, 1, P - 1), Switch))
-        or ((AltSwitch <> '') and (SameText(Copy(S, 1, P - 1), AltSwitch))) then
-        begin
-          Exit(True);
-        end;
-    end;
+      S := Copy(S, 1, P - 1)
+    else
+      S := Copy(S, 1, MaxInt);
+
+    if SameText(S, Switch) or ((AltSwitch <> '') and (SameText(S, AltSwitch))) then
+      Exit(True);
   end;
 end;
+
 
 function GetArgument(Strings: TStrings; out Value: String; Index: Integer): Boolean;
 var
@@ -1147,16 +1188,26 @@ begin
   end;
 end;
 
+function EndsDelimiter(const vFileName: string): Boolean;
+begin
+  Result := EndsStr('/', vFileName) or EndsStr('\', vFileName);
+end;
+
+function StartsDelimiter(const vFileName: string): Boolean;
+begin
+  Result := StartsStr('/', vFileName) or StartsStr('\', vFileName);
+end;
+
 function ExpandToPath(FileName: string; Path: string; Root: string): string;
 begin
   if (FileName <> '') then
   begin
-    if ((LeftStr(FileName, 3) = '../') or (LeftStr(FileName, 3) = '..\')) then
+    if StartsStr('../', FileName) or StartsStr('..\', FileName) then
       Result := ExpandFileName(IncludePathDelimiter(Root) + IncludePathDelimiter(Path) + FileName)
-    else if ((LeftStr(FileName, 2) = './') or (LeftStr(FileName, 2) = '.\')) then
+    else if StartsStr('./', FileName) or StartsStr('.\', FileName) then
       Result := IncludePathDelimiter(Root) + IncludePathDelimiter(Path) + RightStr(FileName, Length(FileName) - 2)
 {$ifdef MSWINDOWS}
-    else if ((LeftStr(FileName, 1) = '/') or (LeftStr(FileName, 1) = '\')) then
+    else if StartsDelimiter(FileName) then
       Result := ExtractFileDrive(Path) + FileName
 {$endif}
     else
@@ -1371,7 +1422,7 @@ var
 begin
   g := vPeriod < 0;
   vPeriod := abs(vPeriod);
-  d := trunc(vPeriod * SecsPerDay);
+  d := Round(vPeriod * SecsPerDay);
   h := d div 3600;
   d := (d  - (h *  3600));
   m := d div 60;
@@ -1414,8 +1465,16 @@ begin
   {$endif}
 end;
 
-function CopyStr(const AText: String; const AFromIndex, AToIndex: Integer): String;
+function SubStr(const AText: String; AFromIndex, AToIndex: Integer): String;
 begin
+  if AFromIndex = 0 then
+    AFromIndex := 1
+  else if AFromIndex < 0 then
+    AFromIndex := Length(AText) + AFromIndex;
+
+  if AToIndex <= 0 then
+    AToIndex := Length(AText) + AToIndex;
+
   Result := Copy(AText, AFromIndex, AToIndex - AFromIndex + 1);
 end;
 
@@ -1544,20 +1603,32 @@ begin
   Result := false;
 end;
 
-function CharInArray(const C: string; const ArrayOfChar: array of Char; CaseInsensitive: Boolean): Boolean;
+function CharArrayToSet(const ArrayOfChar : TArray<Char>) : TSysCharSet;
 var
- itm : String;
+  itm : Char;
 begin
+  Result := [];
   for itm in ArrayOfChar do
+    Include(Result, AnsiChar(itm));
+end;
+
+function CharInArray(const C: Char; const ArrayOfChar: array of Char; CaseInsensitive: Boolean): Boolean;
+var
+  itm : Char;
+begin
+  if CaseInsensitive then
   begin
-    if CaseInsensitive then
-    begin
+    for itm in ArrayOfChar do
       if UpperCase(C) = UpperCase(itm) then
         exit(true);
-    end
-    else if C = itm then
-       exit(true);
+  end
+  else
+  begin
+    for itm in ArrayOfChar do
+      if C = itm then
+        exit(true);
   end;
+
   Result := false;
 end;
 
@@ -1582,11 +1653,6 @@ begin
     Result := s + PathDelim
   else
     Result := s;
-end;
-
-function IncludePathSeparator(const S: string): string;
-begin
-  Result := IncludePathDelimiter(S);
 end;
 
 function IncludeURLDelimiter(S: string): string;
@@ -1895,13 +1961,14 @@ begin
     Result := -1;
 end;
 
-procedure EnumFiles(FileList: TStringList; Folder, Filter: string; Options: TEnumFilesOptions); overload;
+procedure EnumFiles(FileList: TStrings; const Folder, Filter: string; Options: TEnumFilesOptions); overload;
 var
   R: integer;
   SearchRec: TSearchRec;
+  aFolder: string;
 begin
-  Folder := IncludeTrailingPathDelimiter(Folder);
-  R := FindFirst(Folder + Filter, faAnyFile, SearchRec);
+  aFolder := IncludeTrailingPathDelimiter(Folder);
+  R := FindFirst(aFolder + Filter, faAnyFile, SearchRec);
   while R = 0 do
   begin
     if (((efDirectory in Options) and ((SearchRec.Attr and faDirectory) = faDirectory))
@@ -1909,7 +1976,7 @@ begin
       and ((SearchRec.Name <> '.') and (SearchRec.Name <> '..')) then
     begin
       if efFullPath in Options then
-        FileList.Add(Folder + SearchRec.Name)
+        FileList.Add(aFolder + SearchRec.Name)
       else
         FileList.Add(SearchRec.Name);
     end;
@@ -1918,7 +1985,7 @@ begin
   FindClose(SearchRec);
 end;
 
-function DeleteFiles(Path, Files: string): Integer;
+function DeleteFiles(const Path, Files: string): Integer;
 var
   FileList: TStringList;
   f: string;
@@ -1934,7 +2001,7 @@ begin
   end;
 end;
 
-function FirstFile(Path, Files: string): string;
+function FirstFile(const Path, Files: string): string;
 var
   FileList: TStringList;
 begin
@@ -1949,6 +2016,78 @@ begin
     FileList.Free;
   end;
 end;
+
+function mnMulDiv(nNumber, nNumerator, nDenominator: Integer): Integer;
+const
+  Size = SizeOf(Integer);
+  Half = 1 shl (Size - 1);
+var
+  Temp, x, r: Integer;
+begin
+  x := nNumber * nNumerator;
+  r := x mod nDenominator; //Reaminder
+
+  Result := x div nDenominator;
+
+  if r <> 0 then
+  begin
+    if r < 0 then r := - r;
+    Temp := (r shl Size) div nDenominator;
+    if (Temp >= Half) then
+    begin
+      if Result < 0 then
+        Dec(Result)
+      else
+        Inc(Result);
+    end;
+  end;
+end;
+
+function mnMulDiv(nNumber, nNumerator, nDenominator: Int64): Int64; overload;
+const
+  Size = SizeOf(Int64);
+  Half = UInt64(1) shl (Size-1);
+var
+  r: Int64;
+  Temp: UInt64;
+  {$ifdef FPC}
+  x: Int64;
+  {$endif}
+begin
+  {$ifdef FPC}
+  x := nNumber * nNumerator;
+  r := x mod nDenominator; //Reaminder
+  Result := x div nDenominator;
+  {$else}
+  Result := MulDivInt64(nNumber, nNumerator, nDenominator, r);
+  {$endif}
+  if r <> 0 then
+  begin
+    if r < 0 then r := -r;
+    Temp := UInt64(r shl Size) div UInt64(nDenominator);
+    if (Temp >= Half) then
+    begin
+      if Result < 0 then
+        Dec(Result)
+      else
+        Inc(Result);
+    end;
+  end;
+end;
+
+function mnRound(nNumber: Double): Int64; overload;
+begin
+  Result := Trunc(nNumber);
+  if Abs(Frac(nNumber))>=0.5 then
+  begin
+    if Result<0 then
+      Dec(Result)
+    else
+      Inc(Result);
+  end;
+
+end;
+
 
 initialization
   {$ifdef windows}

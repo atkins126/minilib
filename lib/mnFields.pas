@@ -102,6 +102,8 @@ type
     function ReadAsForeign: Integer;
     procedure WriteAsForeign(const Value: Integer);
     function ReadIsExists: Boolean;
+    function ReadAsAsUID: string;
+    procedure WriteAsUID(const Value: string);
   protected
     function GetValue: Variant; virtual; abstract;
     procedure SetValue(const AValue: Variant); virtual; abstract;
@@ -162,6 +164,7 @@ type
     property AsBytes: TBytes read ReadAsBytes write WriteAsBytes;
     property AsGuid: TGUID read ReadAsGuid write WriteAsGuid;
     property AsForeign: Integer read ReadAsForeign write WriteAsForeign; // alias for as integer for foreign fields
+    property AsUID: string read ReadAsAsUID write WriteAsUID; // alias for as integer for foreign fields
 
     property IsNull: Boolean read ReadIsNull write WriteIsNull;
     property IsExists: Boolean read ReadIsExists;
@@ -255,7 +258,7 @@ type
     procedure SaveToStream(Stream: TStream); virtual;
     procedure LoadFromFile(const FileName: string);
     procedure SaveToFile(const FileName: string);
-    function AddItem(S: string; Separator: string; TrimIt: Boolean = False): TmnField; overload;
+    function AddItem(S: string; Seperator: string; TrimIt: Boolean = False): TmnField; overload;
     function Add(AName, AValue: string): TmnField; overload;
     //This will split the name and value
     function Put(const AName, AValue: string): TmnField; overload;
@@ -611,6 +614,11 @@ begin
   Result := AnsiString(GetAsString);
 end;
 
+function TmnCustomField.ReadAsAsUID: string;
+begin
+  Result := AsString;
+end;
+
 procedure TmnCustomField.WriteAsAnsiString(const AValue: ansistring);
 begin
   {$ifdef FPC}
@@ -799,6 +807,14 @@ begin
   Result := UTF8Encode(GetAsString); // the compiler will convert it
 end;
 
+procedure TmnCustomField.WriteAsUID(const Value: string);
+begin
+  if Value = '' then
+    Clear
+  else
+    AsString := Value;
+end;
+
 procedure TmnCustomField.WriteAsUtf8String(const AValue: UTF8String);
 begin
   {$ifdef FPC}
@@ -906,13 +922,13 @@ begin
   Add(Result);
 end;
 
-function TmnFields.AddItem(S: string; Separator: string; TrimIt: Boolean): TmnField;
+function TmnFields.AddItem(S: string; Seperator: string; TrimIt: Boolean): TmnField;
 var
   p: Integer;
   aName: string;
   aValue: string;
 begin
-  p := Pos(Separator, S);
+  p := Pos(Seperator, S);
   if p > 0 then
   begin
     aName := Trim(Copy(S, 1, P - 1));
