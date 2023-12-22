@@ -58,8 +58,8 @@ TStrToStringsOptions = set of (
 
 //I want to StrToStrings to replace it with StrToStringsEx
 
-function StrToStringsCallback(Content: string; Sender: Pointer; const CallBackProc: TStrToStringsCallbackProc; Separators: TSysCharSet = [#0, #10, #13]; IgnoreInitialWhiteSpace: TSysCharSet = [' ']; Quotes: TSysCharSet = ['''', '"']; vOptions: TStrToStringsOptions = []): Integer; overload;
-function StrToStrings(Content: string; Strings: TStrings; Separators: TSysCharSet = [#0, #10, #13]; IgnoreInitialWhiteSpace: TSysCharSet = [' ']; Quotes: TSysCharSet = ['''', '"']): Integer; overload;
+function StrToStringsCallback(const Content: string; Sender: Pointer; const CallBackProc: TStrToStringsCallbackProc; Separators: TSysCharSet = [#0, #10, #13]; IgnoreInitialWhiteSpace: TSysCharSet = [' ']; Quotes: TSysCharSet = ['''', '"']; vOptions: TStrToStringsOptions = []): Integer; overload;
+function StrToStrings(const Content: string; Strings: TStrings; Separators: TSysCharSet = [#0, #10, #13]; IgnoreInitialWhiteSpace: TSysCharSet = [' ']; Quotes: TSysCharSet = ['''', '"']): Integer; overload;
 
 {
   Example
@@ -69,15 +69,15 @@ function StrToStrings(Content: string; Strings: TStrings; Separators: TSysCharSe
 
 }
 
-function StrToStringsExCallback(Content: string; FromIndex: Integer; Sender: Pointer; Separators: array of string; out MatchCount: Integer; const CallBackProc: TStrToStringsExCallbackProc; IgnoreInitialWhiteSpace: TSysCharSet = [' ']; Quotes: TSysCharSet = ['''', '"']; vOptions: TStrToStringsOptions = []): Integer;
-function StrToStringsEx(Content: string; Strings: TStrings; Separators: Array of string; IgnoreInitialWhiteSpace: TSysCharSet = [' ']; Quotes: TSysCharSet = ['''', '"']): Integer; overload;
+function StrToStringsExCallback(const Content: string; FromIndex: Integer; Sender: Pointer; const Separators: array of string; out MatchCount: Integer; const CallBackProc: TStrToStringsExCallbackProc; IgnoreInitialWhiteSpace: TSysCharSet = [' ']; Quotes: TSysCharSet = ['''', '"']; vOptions: TStrToStringsOptions = []): Integer;
+function StrToStringsEx(const Content: string; Strings: TStrings; Separators: Array of string; IgnoreInitialWhiteSpace: TSysCharSet = [' ']; Quotes: TSysCharSet = ['''', '"']): Integer; overload;
 
 //function StrToStringsEx(Content: string; Strings: TStrings; IgnoreInitialWhiteSpace: TSysCharSet = [' ']; Quotes: TSysCharSet = ['''', '"']): Integer; overload;
 
 procedure StrToStringsCallbackProc(Sender: Pointer; Index: Integer; S: string; var Resume: Boolean);
 procedure StrToStringsDequoteCallbackProc(Sender: Pointer; Index:Integer; S: string; var Resume: Boolean);
 
-function StrScanTo(Content: string; FromIndex: Integer; out S: string; out CharIndex, NextIndex, MatchCount: Integer; Separators: array of string; IgnoreInitialWhiteSpace: TSysCharSet = [' ']; Quotes: TSysCharSet = ['''', '"']): Boolean;
+function StrScanTo(const Content: string; FromIndex: Integer; out S: string; out CharIndex, NextIndex, MatchCount: Integer; const Separators: array of string; IgnoreInitialWhiteSpace: TSysCharSet = [' ']; Quotes: TSysCharSet = ['''', '"']): Boolean;
 
 {
   examples:
@@ -226,6 +226,8 @@ function DescapeString(const S: string; Esc: string; Chars: array of Char; Escap
 function EscapeStringC(const S: string): string;
 function DescapeStringC(const S: string): string;
 function ToUnixPathDelimiter(const S: string): string;
+function CorrectPath(const Path: string): string;
+function ExpandFile(const Name: string): string;
 
 //TODO pascal
 //function EscapeStringPas(const S: string): string;
@@ -640,7 +642,7 @@ begin
   (TObject(Sender) as TStrings).Add(Name + (TObject(Sender) as TStrings).NameValueSeparator + Value);
 end;
 
-function StrToStringsCallback(Content: string; Sender: Pointer; const CallBackProc: TStrToStringsCallbackProc; Separators: TSysCharSet; IgnoreInitialWhiteSpace: TSysCharSet; Quotes: TSysCharSet; vOptions: TStrToStringsOptions): Integer;
+function StrToStringsCallback(const Content: string; Sender: Pointer; const CallBackProc: TStrToStringsCallbackProc; Separators: TSysCharSet; IgnoreInitialWhiteSpace: TSysCharSet; Quotes: TSysCharSet; vOptions: TStrToStringsOptions): Integer;
 var
   Start, Cur: Integer;
   Resume: Boolean;
@@ -703,7 +705,7 @@ begin
   end;
 end;
 
-function StrToStrings(Content: string; Strings: TStrings; Separators: TSysCharSet; IgnoreInitialWhiteSpace: TSysCharSet; Quotes: TSysCharSet): Integer;
+function StrToStrings(const Content: string; Strings: TStrings; Separators: TSysCharSet; IgnoreInitialWhiteSpace: TSysCharSet; Quotes: TSysCharSet): Integer;
 begin
   if (Strings = nil) then
     raise Exception.Create('StrToStrings: Strings is nil');
@@ -717,7 +719,7 @@ end;
 
 //Ex
 
-function StrToStringsExCallback(Content: string; FromIndex: Integer; Sender: Pointer; Separators: array of string; out MatchCount: Integer; const CallBackProc: TStrToStringsExCallbackProc; IgnoreInitialWhiteSpace: TSysCharSet; Quotes: TSysCharSet; vOptions: TStrToStringsOptions): Integer;
+function StrToStringsExCallback(const Content: string; FromIndex: Integer; Sender: Pointer; const Separators: array of string; out MatchCount: Integer; const CallBackProc: TStrToStringsExCallbackProc; IgnoreInitialWhiteSpace: TSysCharSet; Quotes: TSysCharSet; vOptions: TStrToStringsOptions): Integer;
 var
   Start, Cur, SepLength: Integer;
   Resume: Boolean;
@@ -812,7 +814,7 @@ begin
   TStrings(Sender).Add(S); //Be sure sender is TStrings
 end;
 
-function StrToStringsEx(Content: string; Strings: TStrings; Separators: array of string; IgnoreInitialWhiteSpace: TSysCharSet; Quotes: TSysCharSet): Integer;
+function StrToStringsEx(const Content: string; Strings: TStrings; Separators: array of string; IgnoreInitialWhiteSpace: TSysCharSet; Quotes: TSysCharSet): Integer;
 var
   MatchCount: Integer;
 begin
@@ -841,7 +843,7 @@ begin
   TResultString(Sender^).NextIndex := NextIndex;
 end;
 
-function StrScanTo(Content: string; FromIndex: Integer; out S: string; out CharIndex, NextIndex, MatchCount: Integer; Separators: array of string; IgnoreInitialWhiteSpace: TSysCharSet; Quotes: TSysCharSet): Boolean;
+function StrScanTo(const Content: string; FromIndex: Integer; out S: string; out CharIndex, NextIndex, MatchCount: Integer; const Separators: array of string; IgnoreInitialWhiteSpace: TSysCharSet; Quotes: TSysCharSet): Boolean;
 var
   r: TResultString;
 begin
@@ -1645,6 +1647,29 @@ end;
 function ToUnixPathDelimiter(const S: string): string;
 begin
   Result := StringReplace(S, '\', '/', [rfReplaceAll]);
+end;
+
+function CorrectPath(const Path: string): string;
+begin
+  {$IFDEF MSWINDOWS}
+  Result := StringReplace(Path, '/', PathDelim, [rfReplaceAll]);//correct it for linux
+  {$else}
+  Result := StringReplace(Path, '\', PathDelim, [rfReplaceAll]);//correct it for linux
+  {$endif MSWINDOWS}
+end;
+
+function ExpandFile(const Name: string): string;
+var
+  aEndsDelimiter: Boolean;
+begin
+  aEndsDelimiter := EndsDelimiter(Name);
+  Result := ExpandFileName(Name);
+
+  if aEndsDelimiter then
+  begin
+    //posix ExpandFileName remove last PathDelim;
+    Result := IncludePathDelimiter(Result);
+  end;
 end;
 
 function IncludePathDelimiter(const S: string): string;

@@ -40,6 +40,7 @@ interface
 
 uses
   SysUtils, Classes, syncobjs, StrUtils, //NetEncoding, Hash,
+  DateUtils,
   mnUtils, mnSockets, mnServers, mnStreams, mnStreamUtils,
   mnFields, mnParams, mnMultipartData, mnModules;
 
@@ -51,6 +52,7 @@ type
     hrOK,
     hrError,
     hrFound, //302
+    hrNotModified,
     hrMovedTemporarily, //307
     hrNotFound,
     hrSwitchingProtocols,
@@ -103,6 +105,10 @@ type
     procedure Unprepare(var Result: TmodRespondResult); override;
     procedure RespondResult(var Result: TmodRespondResult); override;
     function CreateRespond: TmodRespond; override;
+
+    procedure RespondNotFound;
+    procedure RespondNotActive;
+    procedure SendFile(const vFile: string);
   public
     destructor Destroy; override;
     property Respond: TmodHttpRespond read GetRespond;
@@ -115,7 +121,6 @@ type
     function GetModule: TmodWebModule;
   protected
     function GetDefaultDocument(Root: string): string;
-    procedure RespondNotFound;
     procedure RespondResult(var Result: TmodRespondResult); override;
     procedure Prepare(var Result: TmodRespondResult); override;
     procedure Created; override;
@@ -149,9 +154,15 @@ type
     property DefaultDocument: TStringList read FDefaultDocument write SetDefaultDocument;
   end;
 
+
+  ThttpModules = class(TmodModules)
+  protected
+    function CheckRequest(const ARequest: string): Boolean; override;
+  end;
+
   { TmodWebModules }
 
-  TmodWebModules = class(TmodModules)
+  TmodWebModules = class(ThttpModules)
   protected
   public
     procedure ParseHead(ARequest: TmodRequest; const RequestLine: string); override;
@@ -380,7 +391,7 @@ end;
 
 procedure TmodHttpPostCommand.RespondResult(var Result: TmodRespondResult);
 begin
-  if SameText(Request.Method, 'POST') then
+  {if SameText(Request.Method, 'POST') then
   begin
     if (Request.Header.Field['Content-Type'].Have('application/json')) then
     begin
@@ -398,7 +409,7 @@ begin
       Contents.Position := 0; //it is memory btw
       Contents.SaveToFile('c:\temp\1.txt');
     end;
-  end;
+  end;}
   inherited;
 end;
 
@@ -483,20 +494,6 @@ end;
 
 { TmodURICommand }
 
-procedure TmodURICommand.RespondNotFound;
-var
-  Body: string;
-begin
-  Respond.HttpResult := hrOK;
-  Respond.AddHeader('Content-Type', 'text/html');
-  Respond.SendHeader;
-  Body := '<HTML><HEAD><TITLE>404 Not Found</TITLE></HEAD>' +
-    '<BODY><H1>404 Not Found</H1>The requested URL ' +
-    ' was not found on this server.<P><h1>Powerd by Mini Web Server</h3></BODY></HTML>';
-  Respond.Stream.WriteString(Body);
-  Respond.KeepAlive := False;
-end;
-
 function TmodURICommand.GetModule: TmodWebModule;
 begin
   Result := (inherited Module) as TmodWebModule;
@@ -554,38 +551,10 @@ end;}
 
 
 procedure TmodHttpGetCommand.RespondDocument(const vDocument: string; var Result: TmodRespondResult);
-var
-  aDocSize: Int64;
-  aDocStream: TFileStream;
 begin
   if FileExists(vDocument) then
   begin
-    if Active then
-    begin
-      aDocStream := TFileStream.Create(vDocument, fmOpenRead or fmShareDenyWrite);
-      try
-        {if Respond.KeepAlive then
-          aDocSize := CompressSize(PByte(aDocStream.Memory), aDocStream.Size)
-        else}
-          aDocSize := aDocStream.Size;
-
-        Respond.HttpResult := hrOK;
-
-        if Active then
-        begin
-          Respond.AddHeader('Content-Type', DocumentToContentType(vDocument));
-          if Respond.KeepAlive then
-            Respond.AddHeader('Content-Length', IntToStr(aDocSize));
-        end;
-
-        Respond.SendHeader;
-
-        if Active then
-          Respond.Stream.WriteStream(aDocStream);
-      finally
-        aDocStream.Free;
-      end;
-    end;
+    SendFile(vDocument);
   end
   else
     RespondNotFound;
@@ -613,12 +582,15 @@ begin
   if (Request.Path = '') or StartsDelimiter(Request.Path) or StartsStr('.', Request.Path) then
     aDocument := aRoot + Request.Path
   else
-    aDocument := aRoot + '\' +Request.Path;
-
-  aDocument := ExpandFileName(aDocument);
+    aDocument := IncludePathDelimiter(aRoot) + Request.Path;
 
 
-  aDocument := StringReplace(aDocument, '/', PathDelim, [rfReplaceAll]);//correct it for linux
+  aRoot := CorrectPath(aRoot);
+  aDocument := CorrectPath(aDocument);
+
+  aRoot := ExpandFile(aRoot);
+  aDocument := ExpandFile(aDocument);
+
 
   if EndsDelimiter(aDocument) then //get the default file if it not defined
      aDocument := GetDefaultDocument(aDocument);
@@ -761,6 +733,7 @@ end;
 procedure TmodHttpCommand.Prepare(var Result: TmodRespondResult);
 var
   Key: string;
+  aKeepAlive: Boolean;
 begin
   inherited;
 
@@ -772,14 +745,17 @@ begin
     //Respond.AddHeader('Sec-WebSocket-Accept', Key);
   end;
 
-  if SameText(Respond.Header.ReadString('Connection'), 'Keep-Alive') then
+  aKeepAlive := (Module.UseKeepAlive = klvUndefined) and SameText(Request.Header.ReadString('Connection'), 'Keep-Alive');
+  aKeepAlive := aKeepAlive or ((Module.UseKeepAlive = klvKeepAlive) and not SameText(Request.Header.ReadString('Connection'), 'close'));
+
+  if aKeepAlive then
   begin
     Respond.KeepAlive := True;
     Respond.AddHeader('Connection', 'Keep-Alive');
-    Respond.AddHeader('Keep-Alive', 'timout=' + IntToStr(Module.KeepAliveTimeOut div 5000) + ', max=100');
+    Respond.AddHeader('Keep-Alive', 'timout=' + IntToStr(Module.KeepAliveTimeOut div 1000) + ', max=100');
   end;
 
-  if Module.UseCompressing then
+  if not aKeepAlive and Module.UseCompressing then
   begin
     if Request.Header.Field['Accept-Encoding'].Have('gzip', [',']) then
       Respond.CompressClass := TmnGzipStreamProxy
@@ -802,9 +778,9 @@ begin
   inherited;
   if not Respond.Header.Exists['Content-Length'] then
     Respond.KeepAlive := False;
-  if Respond.KeepAlive and (Module.UseKeepAlive in [klvUndefined, klvKeepAlive]) and SameText(Request.Header.ReadString('Connection'), 'Keep-Alive') then
+
+  if Respond.KeepAlive then
   begin
-    Result.Timout := Module.KeepAliveTimeOut;
     if Request.Header.IsExists('Keep-Alive') then //idk if really sent from client
     begin
       aParams := TmnParams.Create;
@@ -817,7 +793,10 @@ begin
       finally
         aParams.Free;
       end;
-    end;
+    end
+    else
+      Result.Timout := Module.KeepAliveTimeOut;
+
     Result.Status := Result.Status + [mrKeepAlive];
   end;
 
@@ -831,6 +810,93 @@ procedure TmodHttpCommand.RespondResult(var Result: TmodRespondResult);
 begin
   inherited;
   Log(Request.Client + ': ' + Request.Raw);
+end;
+
+procedure TmodHttpCommand.RespondNotActive;
+var
+  Body: string;
+begin
+  Respond.HttpResult := hrOK;
+  Respond.AddHeader('Content-Type', 'text/html');
+  Respond.SendHeader;
+  Body := '<HTML><HEAD><TITLE>404 Not Active</TITLE></HEAD>' +
+    '<BODY><H1>404 Not Found</H1>The requested URL ' +
+    ' was not found on this server.<P><h1>Powerd by Mini Web Server</h3></BODY></HTML>';
+  Respond.Stream.WriteString(Body);
+  Respond.KeepAlive := False;
+end;
+
+procedure TmodHttpCommand.RespondNotFound;
+var
+  Body: string;
+begin
+  Respond.HttpResult := hrOK;
+  Respond.AddHeader('Content-Type', 'text/html');
+  Respond.SendHeader;
+  Body := '<HTML><HEAD><TITLE>404 Not Found</TITLE></HEAD>' +
+    '<BODY><H1>404 Not Found</H1>The requested URL ' +
+    ' was not found on this server.<P><h1>Powerd by Mini Web Server</h3></BODY></HTML>';
+  Respond.Stream.WriteString(Body);
+  Respond.KeepAlive := False;
+end;
+
+
+procedure TmodHttpCommand.SendFile(const vFile: string);
+var
+  aDocSize: Int64;
+  aDocStream: TFileStream;
+  aDate: TDateTime;
+  aEtag, aFtag: string;
+begin
+  if Active then
+  begin
+    FileAge(vFile, aDate);
+    aFtag := DateTimeToUnix(aDate).ToString;
+    aEtag := Request.Header['If-None-Match'];
+    if (aEtag<>'') and (aEtag=aFtag) then
+    begin
+      Respond.HttpResult := hrNotModified;
+      Respond.SendHeader;
+      Log(vFile+': not modified');
+      Exit;
+    end;
+
+
+    aDocStream := TFileStream.Create(vFile, fmOpenRead or fmShareDenyWrite);
+    try
+      {if Respond.KeepAlive then
+        aDocSize := CompressSize(PByte(aDocStream.Memory), aDocStream.Size)
+      else}
+        aDocSize := aDocStream.Size;
+
+      Respond.HttpResult := hrOK;
+
+      //Respond.AddHeader('Cache-Control', 'max-age=600');
+      Respond.AddHeader('Cache-Control', 'max-age=600');
+      //Respond.AddHeader('Cache-Control', 'public');
+      //Respond.AddHeader('Date', Now);
+      Respond.AddHeader('Last-Modified', aDate);
+      Respond.AddHeader('ETag', aFtag);
+      if Active then
+      begin
+        Respond.AddHeader('Content-Type', DocumentToContentType(vFile));
+        if Respond.KeepAlive then
+          Respond.AddHeader('Content-Length', IntToStr(aDocSize));
+      end;
+
+      Respond.SendHeader;
+
+      if Active then
+        Respond.Stream.WriteStream(aDocStream);
+    finally
+      aDocStream.Free;
+    end;
+  end
+  else
+  begin
+    RespondNotActive;
+  end;
+
 end;
 
 function TmodHttpCommand.CreateRespond: TmodRespond;
@@ -859,6 +925,7 @@ begin
     hrNotFound: Result := Result + '404 NotFound';
     hrMovedTemporarily: Result := Result + '307 Temporary Redirect';
     hrFound: Result := Result + '302 Found';
+    hrNotModified: Result := Result + '304 Not Modified';
     hrSwitchingProtocols: Result := Result + '101 Switching Protocols';
     hrServiceUnavailable: Result := Result + '503 Service Unavailable';
   end;
@@ -912,6 +979,13 @@ begin
   Respond.PutHeader('Access-Control-Allow-Method', 'POST');
   Respond.PutHeader('Access-Control-Allow-Headers', 'X-PINGOTHER, Content-Type');
 
+end;
+
+{ ThttpModules }
+
+function ThttpModules.CheckRequest(const ARequest: string): Boolean;
+begin
+  Result := Server.UseSSL or (ARequest[1]<>#$16);
 end;
 
 initialization
