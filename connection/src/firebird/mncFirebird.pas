@@ -54,6 +54,7 @@ type
     procedure DoDisconnect; override;
     function GetConnected: Boolean; override;
     procedure DoInit; override;
+    procedure DoExecute(const vSQL: string); override;
   public
     constructor Create; override;
     class function Capabilities: TmncCapabilities; override;
@@ -65,7 +66,6 @@ type
     procedure Vacuum; override;
     function GetVersion: string;
     function GetExtension: string; override;
-    procedure Execute(const vSQL: string); override;
     property Role: string read FRole write FRole;
     property CharacterSet: string read FCharacterSet write FCharacterSet; //ex: WIN1252 for Lazarus use UTF8
     //todo 'character set WIN1252 collate WIN_PTBR';
@@ -137,6 +137,7 @@ type
     constructor Create(vColumn: TmncColumn); override;
     destructor Destroy; override;
     property SQLVAR: TmncSQLVAR read FSQLVAR write FSQLVAR;
+
   end;
 
   { TmncFBFields }
@@ -148,11 +149,11 @@ type
   protected
     function GetModified: Boolean;
     function DoCreateField(vColumn: TmncColumn): TmncField; override;
-    procedure Detach; override;
   public
     constructor Create(vColumns: TmncColumns); override;
     destructor Destroy; override;
     procedure Clear; override;
+    procedure Detach;
     property Items[Index: Integer]: TmncFBField read GetItem;
     property SQLDA: PXSQLDA read FSQLDA;
   end;
@@ -206,7 +207,7 @@ type
   protected
     function GetModified: Boolean;
     function CreateParam: TmncParam; override;
-    procedure Detach; override;
+    procedure Detach;
   public
     property Items[Index: Integer]: TmncFBParam read GetItem;
   end;
@@ -656,7 +657,7 @@ begin
   end;
 end;
 
-procedure TmncFBConnection.Execute(const vSQL: string);
+procedure TmncFBConnection.DoExecute(const vSQL: string);
 var
   tr_handle: TISC_TR_HANDLE;
   StatusVector: TStatusVector;

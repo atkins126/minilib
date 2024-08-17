@@ -132,6 +132,7 @@ type
     CheckSum: WORD;
     SessionID: WORD; //or some data on respond
     ReplyID: WORD;
+    procedure Log;
   end;
 
   PZKHeader = ^TZKHeader;
@@ -142,7 +143,8 @@ type
     Start: LongWord; //5050827d;
     Size: LongWord;
     Header: TZKHeader;
-    function DataSize: Integer;
+    function DataSize: LongWord;
+    procedure Log;
   end;
 
   PZKPayload = ^TZKPayload;
@@ -233,7 +235,9 @@ type
     procedure Dump;
     {$ifdef DEBUG}
     procedure DumpHex(BytesInLine: Integer = 0);
+    function DumpHexs(BytesInLine: Integer = 0): string;
     {$endif}
+    procedure SaveToFile(const vFile: string);
   end;
 
   TZKSocketStream = Class(TmnClientSocketStream)
@@ -317,7 +321,7 @@ end;
 
 { TZKPayload }
 
-function TZKPayload.DataSize: Integer;
+function TZKPayload.DataSize: LongWord;
 begin
   Result := Self.Size - SizeOf(Self.Header);
 end;
@@ -338,6 +342,13 @@ Device->PC
 |       CMD       |    Check Sum    |      Data1      |     Reply ID    |Data2
 
 *}
+
+procedure TZKPayload.Log;
+begin
+  Write('Start:', Start, ', Size:', Size, '  ');
+  Header.Log;
+  Writeln('');
+end;
 
 { TByteHelper }
 
@@ -437,6 +448,19 @@ begin
   Result := PWord(@Self[Index])^;
 end;
 
+procedure TByteHelper.SaveToFile(const vFile: string);
+var
+  m: TMemoryStream;
+begin
+  m := TMemoryStream.Create;
+  try
+    m.Write(Self[0], Length(Self));
+    m.SaveToFile(vFile);
+  finally
+    m.Free;
+  end;
+end;
+
 function TByteHelper.GetDWord(Index: Integer): LongWord;
 begin
   Result := PLongWord(@Self[Index])^;
@@ -483,6 +507,27 @@ begin
   end;
   WriteLn('');
 end;
+
+function TByteHelper.DumpHexs(BytesInLine: Integer): string;
+var
+  i: Integer;
+  c: Integer;
+begin
+  Result := '';
+  c := 0;
+  for i := 0  to Count -1 do
+  begin
+    Result := Result + IntToHex(Self[i], 2);
+    Inc(c);
+    if (BytesInLine > 0) and (c >= (BytesInLine)) then
+    begin
+      c := 0;
+      Result := Result + #13;
+    end;
+  end;
+  Result := Result + #13;
+end;
+
 {$endif}
 
 { TZKClient }
@@ -595,12 +640,19 @@ begin
             ReceivePayload(Payload);
             if Payload.Header.Command = CMD_DATA then
             begin
-              ReceiveBytes(aBuf, PayLoad.DataSize);
+              if Payload.Header.SessionID=0 then
+              begin
+                ReceiveBuffer(aSize, SizeOf(aSize)); //tested with small date
+                ReceiveBytes(aBuf, Payload.DataSize-SizeOf(aSize));
+              end
+              else
+                ReceiveBytes(aBuf, Payload.DataSize);
+
               RespondData := RespondData + aBuf;
 
-              aWholeSize := aWholeSize - PayLoad.DataSize;
+              {aWholeSize := aWholeSize - PayLoad.DataSize;
               if aWholeSize<aPageSize then
-                aReadSize := aWholeSize;
+                aReadSize := aWholeSize;}
             end
             else if Payload.Header.Command = CMD_ACK_OK then
               Break
@@ -866,7 +918,8 @@ begin
   Result := ExecCommand(CMD_ATTLOG_RRQ, NewReplyID, nil, Payload, Data);
   if Result then
   begin
-    //Data.DumpHex(40);
+    //var s := Data.DumpHexs(40);
+    //TextToFile(UTF8Encode(s), 'c:\temp\dump.txt');
     PAtt := Pointer(Data);
     i := Data.Count div SizeOf(TZKAttData);
     while i > 0 do
@@ -985,6 +1038,13 @@ begin
   Result := ExecCommand(CMD_CLEAR_ATTLOG, NewReplyID);
 end;
 
+{ TZKHeader }
+
+procedure TZKHeader.Log;
+begin
+  Write('Command:', Command, ', CheckSum:', CheckSum, ', SessionID:', SessionID, ', ReplyID: ', ReplyID);
+end;
+
 {
 AttLog
 CMD_ATTLOG_RRQ
@@ -1008,6 +1068,7 @@ CMD_USERTEMP_RRQ
 
 
 }
+
 
 end.
 

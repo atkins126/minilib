@@ -13,7 +13,7 @@ unit mnLogs;
 interface
 
 uses
-  {$ifdef WINDOWS} Windows, {$endif}
+  {$ifdef MSWINDOWS} Windows, {$endif}
   {$ifdef FPC}
   {$else}
   System.Types,
@@ -22,6 +22,8 @@ uses
 
 type
 
+  TLogLevel = (lglError, lglWarning, lglInfo, lglDebug);
+
   { ILog }
 
   ILog = interface(IInterface)
@@ -29,22 +31,38 @@ type
     procedure LogWrite(S: string);
   end;
 
+  TLogDispatcherItem = class(TObject)
+  public
+    LogLevel: TLogLevel;
+    LogObject: TInterfacedPersistent;
+    destructor Destroy; override;
+  end;
+
   { TLogDispatcher }
 
   TLogDispatcher = class(TObjectList)
   private
+    FEnabled: Boolean;
   protected
   public
+    constructor Create;
     destructor Destroy; override;
-    function Add(AObject: TObject): Integer;
-    procedure Write(S: string); overload;
-    procedure WriteLn(S: string); overload;
-    procedure WriteLn(S: string; vArgs: array of const); overload;
+    function Install(ALogLevel: TLogLevel; AObject: TInterfacedPersistent): Integer;
+    function Add(AObject: TLogDispatcherItem): Integer;
+
+    procedure Write(LogLevel: TLogLevel; const S: string); overload;
+    procedure WriteLn(LogLevel: TLogLevel; const S: string); overload;
+
+    procedure Write(const S: string); overload; inline;
+    procedure WriteLn(const S: string); overload;
+    procedure WriteLn(const S: string; const vArgs: array of const); overload;
 
     procedure Write(R: TRect); overload;
     procedure Write(I: Integer); overload;
     procedure Write(X, Y: Integer); overload;
-    procedure Write(S: string; I: Integer); overload;
+    procedure Write(const S: string; I: Integer); overload;
+
+    property Enabled: Boolean read FEnabled write FEnabled;
   end;
 
   { TFileLog }
@@ -52,15 +70,15 @@ type
   TFileLog = class(TInterfacedPersistent, ILog)
   private
     FFileName: string;
-    procedure InternalWrite(S: string);
+    procedure InternalWrite(const S: string);
     function OpenStream: TStream;
     procedure LogWrite(S: string);
   public
-    constructor Create(FileName: string);
+    constructor Create(const FileName: string);
     destructor Destroy; override;
   end;
 
-  TLogEvent = procedure(S: String) of object;
+  TLogEvent = procedure(const s: String) of object;
 
   { TEventLog }
 
@@ -72,14 +90,6 @@ type
     constructor Create(AEvent: TLogEvent);
   end;
 
-  { TDebugOutputLog }
-
-  TDebugOutputLog = class(TInterfacedPersistent, ILog)
-  private
-    procedure LogWrite(S: string);
-  public
-  end;
-
   { TConsoleLog }
 
   TConsoleLog = class(TInterfacedPersistent, ILog)
@@ -88,11 +98,19 @@ type
   public
   end;
 
-procedure InstallFileLog(FileName: string);
-procedure InstallEventLog(AEvent: TLogEvent);
-procedure UninstallEventLog(AEvent: TLogEvent);
-procedure InstallConsoleLog;
-procedure InstallDebugOutputLog;
+  { TDebugOutputLog }
+
+  TDebugOutputLog = class(TInterfacedPersistent, ILog)
+  private
+    procedure LogWrite(S: string);
+  public
+  end;
+
+procedure InstallFileLog(FileName: string; LogLevel: TLogLevel = lglDebug);
+procedure InstallEventLog(AEvent: TLogEvent; LogLevel: TLogLevel = lglDebug);
+procedure UninstallEventLog(AEvent: TLogEvent; LogLevel: TLogLevel = lglDebug);
+procedure InstallConsoleLog(LogLevel: TLogLevel = lglDebug);
+procedure InstallDebugOutputLog(LogLevel: TLogLevel = lglDebug);
 {$ifdef FPC}
 procedure InstallExceptLog(WithIO: Boolean = False);
 {$endif}
@@ -110,30 +128,30 @@ begin
   if not Assigned(FLog) then
   begin
     Lock := TCriticalSection.Create;
-    FLog := TLogDispatcher.Create(True);
+    FLog := TLogDispatcher.Create;
   end;
   Result := FLog;
 end;
 
-procedure InstallFileLog(FileName: string);
+procedure InstallFileLog(FileName: string; LogLevel: TLogLevel);
 begin
-  Log.Add(TFileLog.Create(FileName));
+  Log.Install(LogLevel, TFileLog.Create(FileName));
 end;
 
-procedure InstallEventLog(AEvent: TLogEvent);
+procedure InstallEventLog(AEvent: TLogEvent; LogLevel: TLogLevel);
 begin
-  Log.Add(TEventLog.Create(AEvent));
+  Log.Install(LogLevel, TEventLog.Create(AEvent));
 end;
 
-procedure UninstallEventLog(AEvent: TLogEvent);
+procedure UninstallEventLog(AEvent: TLogEvent; LogLevel: TLogLevel);
 var
   i: Integer;
 begin
   for i := 0 to log.Count -1 do
   begin
-    if Log[i] is TEventLog then
+    if (Log[i] as TLogDispatcherItem).LogObject is TEventLog then
     begin
-      if @(Log[i] as TEventLog).Event = @AEvent then
+      if @((Log[i] as TLogDispatcherItem).LogObject as TEventLog).Event = @AEvent then
       begin
         Log.Delete(i);
         exit;
@@ -143,14 +161,14 @@ begin
   raise Exception.Create('There is no Event install for it');
 end;
 
-procedure InstallConsoleLog;
+procedure InstallConsoleLog(LogLevel: TLogLevel);
 begin
-  Log.Add(TConsoleLog.Create);
+  Log.Install(LogLevel, TConsoleLog.Create);
 end;
 
-procedure InstallDebugOutputLog;
+procedure InstallDebugOutputLog(LogLevel: TLogLevel);
 begin
-  Log.Add(TDebugOutputLog.Create);
+  Log.Install(LogLevel, TDebugOutputLog.Create);
 end;
 
 {$ifdef FPC}
@@ -228,18 +246,29 @@ end;
 
 procedure TDebugOutputLog.LogWrite(S: string);
 begin
-  {$ifdef WINDOWS}
-  s := IntToStr(GetTickCount64) + ': ' +s;
-  {$ifdef FPC}
-  OutputDebugString(PAnsiChar(S));
-  {$else}
-  OutputDebugString(PWideChar(S));
-  {$endif}
+  {$ifdef MSWINDOWS}
+    s := IntToStr(TThread.GetTickCount64) + ': ' +s;
+    {$ifdef FPC}
+    OutputDebugString(PAnsiChar(S));
+    {$else}
+    OutputDebugStringW(PWideChar(S));
+    {$endif}
   {$else}
   {$endif}
 end;
 
 { TLogDispatcher }
+
+function TLogDispatcher.Add(AObject: TLogDispatcherItem): Integer;
+begin
+  Result := inherited Add(AObject);
+end;
+
+constructor TLogDispatcher.Create;
+begin
+  inherited Create(True);
+  Enabled := True;
+end;
 
 destructor TLogDispatcher.Destroy;
 begin
@@ -247,42 +276,49 @@ begin
   inherited;
 end;
 
-function TLogDispatcher.Add(AObject: TObject): Integer;
+function TLogDispatcher.Install(ALogLevel: TLogLevel; AObject: TInterfacedPersistent): Integer;
+var
+  item: TLogDispatcherItem;
 begin
   {$ifndef FPC} //Delphi
   if not (AObject is TInterfacedPersistent) then
     raise Exception.Create('Object is not InterfacedPersistent');
   {$endif}
+
   if not Supports(AObject, ILog) then
     raise Exception.Create('Object is no ILog');
 
-  Result := inherited Add(AObject);
+  item := TLogDispatcherItem.Create;
+  item.LogLevel := ALogLevel;
+  item.LogObject := AObject;
+  Result := inherited Add(item);
 end;
 
-procedure TLogDispatcher.Write(S: string);
+procedure TLogDispatcher.Write(LogLevel: TLogLevel; const S: string);
 var
   i: Integer;
   ALog: ILog;
+  item: TLogDispatcherItem;
 begin
+  if not Enabled then
+    exit;
   Lock.Enter;
   try
     for i := 0 to Count -1 do
     begin
-      {$ifdef FPC}
-      ALog := (Items[i] as ILog);
-      {$else}
-      ALog := (TInterfacedPersistent(Items[i]) as ILog);
-      {$endif}
-      ALog.LogWrite(S);
+      item := Items[i] as TLogDispatcherItem;
+      ALog := (item.LogObject as ILog);
+      if item.LogLevel >= LogLevel then
+        ALog.LogWrite(S);
     end;
   finally
     Lock.Leave;
   end;
 end;
 
-procedure TLogDispatcher.WriteLn(S: string);
+procedure TLogDispatcher.WriteLn(const S: string);
 begin
-  Write(s + #13#10);
+  WriteLn(lglInfo, s);
 end;
 
 procedure TLogDispatcher.Write(R: TRect);
@@ -300,19 +336,29 @@ begin
   Write(IntToStr(X) + ', ' + IntToStr(Y));
 end;
 
-procedure TLogDispatcher.Write(S: string; I: Integer);
+procedure TLogDispatcher.Write(const S: string; I: Integer);
 begin
   Write(S + ': ' + IntToStr(I));
 end;
 
-procedure TLogDispatcher.WriteLn(S: string; vArgs: array of const);
+procedure TLogDispatcher.Write(const S: string);
 begin
-  Self.WriteLn(Format(s, vArgs));
+  Write(lglInfo, S);
+end;
+
+procedure TLogDispatcher.WriteLn(LogLevel: TLogLevel; const S: string);
+begin
+  Write(LogLevel, s + #13#10);
+end;
+
+procedure TLogDispatcher.WriteLn(const S: string; const vArgs: array of const);
+begin
+  WriteLn(lglInfo, Format(s, vArgs));
 end;
 
 { TFileLog }
 
-constructor TFileLog.Create(FileName: string);
+constructor TFileLog.Create(const FileName: string);
 begin
   inherited Create;
   FFileName := FileName
@@ -323,14 +369,16 @@ begin
   inherited;
 end;
 
-procedure TFileLog.InternalWrite(S: string);
+procedure TFileLog.InternalWrite(const S: string);
 var
   aStream: TStream;
+  u: UTF8String;
 begin
   aStream := OpenStream;
   if aStream <> nil then
   try
-    aStream.Write(PChar(s)^, Length(s));
+    u := UTF8Encode(s);
+    aStream.Write(PByte(u)^, Length(u));
   finally
     aStream.Free;
   end;
@@ -365,6 +413,14 @@ begin
   a := StringReplace(s, #13#10, ' ', []);
   a := StringReplace(a, #13, ' ', []);
   InternalWrite(a + #13#10);
+end;
+
+{ TLogDispatcherItem }
+
+destructor TLogDispatcherItem.Destroy;
+begin
+  FreeAndNil(LogObject);
+  inherited;
 end;
 
 initialization

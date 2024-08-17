@@ -4,6 +4,7 @@ unit mnOpenSSL;
  *
  * @license   modifiedLGPL (modified of http://www.gnu.org/licenses/lgpl.html)
  * @author    Zaher Dirkey <zaher, zaherdirkey>
+ * @author    Belal Hamed <belal, belalhamed@gmail.com>
  *}
 
  {**
@@ -30,7 +31,13 @@ uses
 
 type
 
-  EmnOpenSSLException = Exception;
+  { EmnOpenSSLException }
+
+  EmnOpenSSLException = class(Exception)
+  public
+    constructor CreateLastError(const msg : string); overload;
+  end;
+
   { TOpenSSLObject }
 
   TsslError = (seSuccess, seTimeout, seClosed, seInvalid);
@@ -74,6 +81,7 @@ type
   { TCTX }
 
   TContextOptions = set of (
+    coServer,
     coNoCompressing,
     coALPN,
     coALPNHttp2,
@@ -87,6 +95,8 @@ type
     Handle: PSSL_CTX;
     FMethod: TSSLMethod;
     FOwnMethod: Boolean; //created internally
+    FPrivateKey: PEVP_PKEY;
+    FCertificate: PX509;
   public
     constructor Create(AMethod: TSSLMethod; Options: TContextOptions = [coNoCompressing]); overload;
     constructor Create(AMethodClass: TSSLMethodClass; Options: TContextOptions = []); overload;
@@ -94,6 +104,9 @@ type
     procedure SetVerifyLocation(Location: utf8string);
     procedure SetVerifyFile(AFileName: utf8string);
     procedure LoadCertFile(FileName: utf8string);
+    procedure LoadFullChainFile(FileName: utf8string);
+    procedure LoadPFXFile(FileName, Password: utf8string);
+    //procedure LoadFullCertFile(FileName: utf8string);
     procedure LoadPrivateKeyFile(FileName: utf8string);
     procedure CheckPrivateKey;
     procedure SetVerifyNone;
@@ -140,6 +153,7 @@ type
   public
     constructor Create;
     destructor Destroy; override;
+    function GetBIO: PBIO;
     function GetSSL: TSSL;
     function Read(var Buffer; Count: Longint): Longint; override;
     function Write(const Buffer; Count: Longint): Longint; override;
@@ -183,9 +197,11 @@ procedure RaiseSSLError(Message: utf8string);
 
 function MakeCert(var x509p: PX509; var pkeyp: PEVP_PKEY; CN, O, C, OU: utf8string; Bits: Integer; Serial: Integer; Days: Integer): Boolean; overload;
 function MakeCert(CertificateFile, PrivateKeyFile: utf8string; CN, O, C, OU: utf8string; Bits: Integer; Serial: Integer; Days: Integer): Boolean; overload;
+
 function ECDSASign(const vData, vKey: utf8string): TBytes; overload;
 function ECDSASignBase64(const vData, vKey: utf8string): UTF8String; overload;
 function BioBase64Encode(vBuf: PByte; vLen: Integer): UTF8String;
+procedure X509SaveToFile(X509: PX509; const FileName: string);
 
 implementation
 
@@ -209,6 +225,20 @@ begin
     Result := SSL_TLSEXT_ERR_OK;
 end;
 
+procedure SSL_CTX_msg_callback(write_p: integer; version: integer; content_type: integer; buf: pointer; len: Cardinal; ssl: PSSL; arg: pointer); cdecl;
+var
+  b: TBytes;
+  s: string;
+begin
+  if Len<>0 then
+  begin
+    SetLength(b, len);
+    Move(buf, b[0], len);
+    s := TEncoding.UTF8.GetString(b); //TODO Check it in FPC
+    Log.WriteLn(s);
+  end;
+end;
+
 procedure debug_callback(ssl: PSSL; where: cint; ret: cint); cdecl;
 var
   s: UTF8String;
@@ -222,14 +252,25 @@ begin
   case where of
     SSL_CB_ALERT: Log.writeln('SSL alert: '+ SSL_alert_type_string_long(ret)+ ':'+ SSL_alert_desc_string_long(ret)+ ':');
     SSL_CB_LOOP: Log.writeln('SSL state: '+ SSL_state_string(ssl)+ ':'+ SSL_state_string_long(ssl));
-    SSL_CB_HANDSHAKE_START: Log.writeln('SSL handshake started');
-    SSL_CB_HANDSHAKE_DONE: Log.writeln('SSL handshake completed');
+    SSL_CB_HANDSHAKE_START: Log.writeln(lglDebug, 'SSL handshake started');
+    SSL_CB_HANDSHAKE_DONE: Log.writeln(lglDebug, 'SSL handshake completed');
     else
-      Log.writeln('SSL alert: '+ SSL_alert_type_string_long(ret)+ ':'+ SSL_alert_desc_string_long(ret));
+      Log.writeln(lglDebug, 'SSL alert: '+ SSL_alert_type_string_long(ret)+ ':'+ SSL_alert_desc_string_long(ret));
       //Log.writeln('where %d ret %d state:', [where, ret]);
   end;
 end;
 
+procedure X509SaveToFile(X509: PX509; const FileName: string);
+var
+  bio: PBIO;
+begin
+  bio := BIO_new_file(PUTF8Char(FileName), PUTF8Char('wb'));
+  try
+    PEM_write_bio_X509(bio, X509);
+  finally
+    BIO_free(bio);
+  end;
+end;
 
 function BioBase64Encode(vBuf: PByte; vLen: Integer): UTF8String;
 var
@@ -241,6 +282,7 @@ begin
 	b64 := BIO_new(BIO_f_base64());
 	bio := BIO_new(BIO_s_mem());
 	bio := BIO_push(b64, bio);
+
 	BIO_set_flags(bio, BIO_FLAGS_BASE64_NO_NL); //Ignore newlines - write everything in one line
 	BIO_write(bio, vBuf, vLen);
 	BIO_flush(bio);
@@ -251,7 +293,6 @@ begin
 
 	//BIO_set_close(bio, BIO_NOCLOSE);
 	BIO_free_all(bio);
-
 end;
 
 function ECDSASign(const vData, vKey: utf8string): TBytes; overload;
@@ -266,6 +307,7 @@ begin
   try
     aKey := PEM_read_bio_ECPrivateKey(bio, nil, nil, nil);
     try
+      {$ifdef FPC}Result := nil;{$endif}
       aLen := ECDSA_size(aKey);
       SetLength(Result, aLen);
 
@@ -284,7 +326,7 @@ var
   b: TBytes;
 begin
   b := ECDSASign(vData, vKey);
-  Result := BioBase64Encode(PByte(b[0]), Length(b));
+  Result := BioBase64Encode(PByte(b[0]), Length(b)); //TODO check warning in FPC
   //Result := tnet
 end;
 
@@ -442,7 +484,6 @@ begin
 	  PEM_write_bio_X509(outbio, x509);
     BIO_free(outbio);
 
-
     s := ChangeFileExt(CertificateFile, '.csr');
     xx := X509_to_X509_REQ(x509, pkey, EVP_sha256);
     outbio := BIO_new_file(PUTF8Char(s), 'w');
@@ -506,7 +547,7 @@ end;
 
 procedure TTLS_SSLServerMethod.CreateHandle;
 begin
-  Handle := TLS_method();
+  Handle := TLS_server_method();
 end;
 
 { TBIOStreamSSL }
@@ -579,6 +620,16 @@ begin
   Handle := BIO_new_file(PUTF8Char(AFileName), PUTF8Char(Mode));
 end;
 
+{ EmnOpenSSLException }
+
+constructor EmnOpenSSLException.CreateLastError(const msg: string);
+var
+  s: string;
+begin
+  s := ERR_error_string(ERR_peek_error, nil);
+  raise EmnOpenSSLException.CreateFmt(msg + ' [%s]', [s]);
+end;
+
 { TOpenSSLObject }
 
 constructor TOpenSSLObject.Create;
@@ -600,6 +651,11 @@ begin
   inherited Destroy;
   if Handle <> nil then
     BIO_free(Handle);
+end;
+
+function TBIOStream.GetBIO: PBIO;
+begin
+  Result := Handle;
 end;
 
 function TBIOStream.GetSSL: TSSL;
@@ -642,11 +698,29 @@ begin
   Active := True;
 end;
 
+procedure SSL_msg_callback(write_p: integer; version: integer; content_type: integer; buf: pointer; len: Cardinal; ssl: PSSL; arg: pointer); cdecl;
+var
+  b: TBytes;
+  s: string;
+begin
+  if Len<>0 then
+  begin
+    SetLength(b, len);
+    Move(buf, b[0], len);
+    s := TEncoding.UTF8.GetString(b);
+    Log.WriteLn(s);
+  end;
+end;
+
+
 constructor TSSL.Init(ASSL: PSSL);
 begin
   //inherited Create;
   Handle := ASSL;
   Active := True;
+  {$ifopt D+}
+  //SSL_set_msg_callback(ASSL, SSL_msg_callback);
+  {$endif}
 end;
 
 procedure TSSL.SetALPN(Alpns: TArray<string>);
@@ -700,13 +774,13 @@ begin
   begin
     Result := False;
     s := ERR_error_string(ERR_get_error(), nil);
-    Log.WriteLn('Connect: ' + s);
+    Log.WriteLn(lglDebug, 'Connect: ' + s);
   end
   else if ret = 0 then //error
     Result := False
   else
     Result := True;
-  Log.WriteLn('version: ' + SSL_get_version(Handle));
+  Log.WriteLn(lglInfo, 'version: ' + SSL_get_version(Handle));
 
 end;
 
@@ -718,7 +792,7 @@ begin
   if ret <= 0  then
   begin
     err := SSL_get_error(Handle, ret);
-    Log.WriteLn('ServerHandshake: ' + ERR_error_string(err, nil));
+    Log.WriteLn(lglDebug, 'ServerHandshake: ' + ERR_error_string(err, nil));
     Result := False;
   end
   else
@@ -745,8 +819,8 @@ begin
   ReadSize := SSL_read(Handle, Buf, Size);
   if ReadSize <= 0  then
   begin
-    errno := WallSocket.GetSocketError(FSocket);
     err := SSL_get_error(Handle, ReadSize);
+    errno := WallSocket.GetSocketError(FSocket);
 
     {
       Here we have a problem some are not real error, Disconnected gracefully, or read time out
@@ -755,8 +829,8 @@ begin
       Result := seClosed
     else if err = SSL_ERROR_SYSCALL then
     begin
-      Log.WriteLn('Read: ' + ERR_error_string(err, nil));
-      Log.WriteLn('Read: Socket Error: ' + IntToStr(errno));
+      Log.WriteLn(lglInfo, 'Read: ' + ERR_error_string(err, nil));
+      Log.WriteLn(lglInfo, 'Read: Socket Error: ' + IntToStr(errno));
       Result := seInvalid;
       //check time out
     end
@@ -817,18 +891,21 @@ end;
 constructor TContext.Create(AMethod: TSSLMethod; Options: TContextOptions);
 var
   o: Cardinal;
-  s: UTF8String;
   ret , err: Integer;
 begin
   inherited Create;
   FMethod := AMethod;
+  //SSL_library_init
   Handle := SSL_CTX_new(AMethod.Handle);
   if Handle = nil then
     EmnOpenSSLException.Create('Can not create CTX handle');
 
   {$ifopt D+}
   if coDebug in Options then
+  begin
+    SSL_CTX_set_msg_callback(Handle, SSL_CTX_msg_callback);
     SSL_CTX_set_info_callback(Handle, debug_callback);
+  end;
   {$endif}
 
   //SSL_CTX_set_min_proto_version(Handle, TLS1_3_VERSION);
@@ -856,8 +933,20 @@ begin
   if coNoCompressing in Options then
     o := o or SSL_OP_NO_COMPRESSION;
 
+  if coServer in Options then
+    o := o or SSL_OP_CIPHER_SERVER_PREFERENCE;
+
+  o := o or SSL_OP_NO_SSLv2;
+  o := o or SSL_OP_NO_SSLv3;
+
+  { Set SSL_MODE_RELEASE_BUFFERS. This potentially greatly reduces memory
+       usage for no cost at all. */
+  SSL_CTX_set_mode(self->ctx, SSL_MODE_RELEASE_BUFFERS);
+  }
+
   SSL_CTX_set_options(Handle, o);
 
+  //SSL_CTX_set_cipher_list(Handle, 'TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256');
 end;
 
 constructor TContext.Create(AMethodClass: TSSLMethodClass; Options: TContextOptions);
@@ -868,6 +957,8 @@ end;
 
 destructor TContext.Destroy;
 begin
+  EVP_PKEY_free(FPrivateKey);
+  X509_free(FCertificate);
   if FOwnMethod then
     FMethod.Free;
   if Handle <> nil then
@@ -878,36 +969,90 @@ end;
 procedure TContext.LoadCertFile(FileName: utf8string);
 begin
   if SSL_CTX_use_certificate_file(Handle, PUTF8Char(FileName), SSL_FILETYPE_PEM) <= 0 then
-    raise EmnOpenSSLException.Create('fail to load certificate');
+    raise EmnOpenSSLException.CreateLastError('fail to load certificate');
+end;
+
+procedure TContext.LoadFullChainFile(FileName: utf8string);
+begin
+  if SSL_CTX_use_certificate_chain_file(Handle, PUTF8Char(FileName)) <= 0 then
+    raise EmnOpenSSLException.CreateLastError('fail to load full chain certificate');
+end;
+
+//https://stackoverflow.com/questions/6371775/how-to-load-a-pkcs12-file-in-openssl-programmatically
+// https://stackoverflow.com/questions/43119053/does-ssl-ctx-use-certificate-copy-used-certificate-bytes
+
+procedure TContext.LoadPFXFile(FileName, Password: utf8string);
+var
+  bio: PBIO;
+  p12: PKCS12;
+  cert: PX509;
+  chain: PSLLObject;
+  c, i: Integer;
+begin
+  bio := BIO_new_file(PUTF8Char(FileName), PUTF8Char('rb'));
+  if (bio = nil) then
+    raise EmnOpenSSLException.CreateLastError('Error reading file by BIO_new_file');
+
+  try
+    p12 := d2i_PKCS12_bio(bio, nil);
+    if p12 = nil then
+      raise EmnOpenSSLException.CreateLastError('fail to load d2i_PKCS12_bio certificate');
+    try
+      EVP_PKEY_free(FPrivateKey);
+      X509_free(FCertificate);
+
+      chain := OPENSSL_sk_new_null;
+      try
+        if PKCS12_parse(p12, PUTF8Char(Password), FPrivateKey, FCertificate, chain) <=0 then
+          raise EmnOpenSSLException.CreateLastError('Error PKCS12_parse');
+
+        if SSL_CTX_use_PrivateKey(Handle, FPrivateKey) <= 0 then
+          raise EmnOpenSSLException.Create('fail to load private key');
+
+        if (SSL_CTX_use_certificate(Handle, FCertificate) <= 0) then
+           raise EmnOpenSSLException.CreateLastError('Error SSL_CTX_use_certificate');
+
+        c := sk_X509_num(chain);
+        for  i := 0 to c-1 do
+        begin
+            cert := sk_X509_value(chain, i);
+            if SSL_CTX_add_extra_chain_cert(Handle, cert) <=0 then
+              raise EmnOpenSSLException.CreateLastError('Error SSL_CTX_add_extra_chain_cert');
+        end;
+
+      finally
+        OPENSSL_sk_free(chain);
+      end;
+    finally
+		  PKCS12_free(p12);
+    end;
+  finally
+    BIO_free(bio);
+  end;
 end;
 
 procedure TContext.LoadPrivateKeyFile(FileName: utf8string);
-var
-  i: Integer;
 begin
-  i := SSL_CTX_use_PrivateKey_file(Handle, PUTF8Char(FileName), SSL_FILETYPE_PEM);
-  if i <= 0 then
+  if SSL_CTX_use_PrivateKey_file(Handle, PUTF8Char(FileName), SSL_FILETYPE_PEM) <= 0 then
     raise EmnOpenSSLException.Create('fail to load private key');
 end;
 
 procedure TContext.CheckPrivateKey;
 begin
   if SSL_CTX_check_private_key(Handle) = 0 then
-    raise EmnOpenSSLException.Create('Private key does not match the public certificate');
+    raise EmnOpenSSLException.CreateLastError('Private key does not match the public certificate');
 end;
 
 procedure TContext.SetVerifyFile(AFileName: utf8string);
-var
-  err: Integer;
 begin
-  err := SSL_CTX_load_verify_locations(Handle, PUTF8Char(AFileName), nil);
+  if SSL_CTX_load_verify_locations(Handle, PUTF8Char(AFileName), nil) <0 then
+    raise EmnOpenSSLException.CreateLastError('SSL_CTX_load_verify_locations');
 end;
 
 procedure TContext.SetVerifyLocation(Location: utf8string);
-var
-  err: Integer;
 begin
-  err := SSL_CTX_load_verify_locations(Handle, nil, PUTF8Char(Location));
+  if SSL_CTX_load_verify_locations(Handle, nil, PUTF8Char(Location)) <=0 then
+    raise EmnOpenSSLException.CreateLastError('Private key does not match the public certificate');
 end;
 
 procedure TContext.SetVerifyNone;

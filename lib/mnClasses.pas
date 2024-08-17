@@ -17,12 +17,12 @@ unit mnClasses;
 interface
 
 uses
-  Classes, SysUtils, StrUtils, DateUtils, Types,
+  Classes, SysUtils, StrUtils, Types, DateUtils,
   Generics.Collections, Contnrs;
 
 type
 
-  {$IFDEF FPC}
+  {$IFDEF FPC} //*Temporary, To be compatiple with Delphi
   TProc = Reference to procedure;
   TProc<T> = reference to procedure (Arg1: T);
   TProc<T1,T2> = reference to procedure (Arg1: T1; Arg2: T2);
@@ -45,7 +45,7 @@ type
   //USAGE FPC: TMyObjectList = class(specialize TmnObjectList<TMyObject>)
 
   {$ifdef FPC}
-  TmnObjectList<_Object_> = class(Contnrs.TObjectList)
+  TmnObjectList<_Object_> = class(TObjectList)
   {$else}
   TmnObjectList<_Object_: class> = class(TObjectList<_Object_>)
   {$endif}
@@ -63,8 +63,8 @@ type
         FIndex: Integer;
       public
         constructor Create(AList: TmnObjectList<_Object_>);
-        function GetCurrent: _Object_;
-        function MoveNext: Boolean;
+        function GetCurrent: _Object_; inline;
+        function MoveNext: Boolean; inline;
         property Current: _Object_ read GetCurrent;
       end;
 
@@ -80,6 +80,12 @@ type
     {$H-}procedure Removing(Item: _Object_); virtual;{$H+}
     {$H-}procedure Added(Item: _Object_); virtual;{$H+}
 
+
+    //* Belal: If both Left and Right is eaual the orignal sort swap it, we do not want to swapt it
+    //* Thanks to Belal
+    function Compare(Left, Right: _Object_): Integer; virtual;
+    procedure QuickSortItems(iLo, iHi: Integer);
+
     procedure Created; virtual;
     function RequireItem: _Object_; virtual;
   public
@@ -94,6 +100,8 @@ type
     function Require(Index: Integer): _Object_;
     {$endif}
     function Peek(Index: Integer): _Object_;
+
+    procedure QuickSort; virtual;
 
     property Items[Index: Integer]: _Object_ read GetItem write SetItem; default;
     function Last: _Object_;
@@ -114,11 +122,7 @@ type
 
     //USAGE: TMyNamedObjectList = class(TmnNamedObjectList<TMyNamedObject>)
 
-    {$ifdef FPC}
-    TmnNamedObjectList<_Object_> = class(TmnObjectList<_Object_>)
-    {$else}
     TmnNamedObjectList<_Object_: TmnNamedObject> = class(TmnObjectList<_Object_>)
-    {$endif}
     private
       FDicSize: Integer;
       FDic: TDictionary<string, _Object_>;
@@ -141,6 +145,7 @@ type
       {$ifdef FPC} //not now
       procedure Clear; override;
       {$endif}
+      property Item[const Index: string]: _Object_ read Find;
     end;
 
     { TmnNameValueObjectList }
@@ -149,24 +154,44 @@ type
     private
       FValue: string;
     public
-      constructor Create(const vName, AValue: string); virtual; //must be virtual for generic function
+      procedure Assign(FromObject: TObject); virtual;
+      constructor Create(const vName: string; const AValue: string = ''); virtual; //must be virtual for generic function
+      constructor CreateFrom(FromObject: TmnNameValueObject);
       property Value: string read FValue write FValue;
     end;
 
     //USAGE: TMyNameValueObjectList = class(TmnNameValueObjectList<TMyNameValueObject>)
 
-    {$ifdef FPC}
-    TmnNameValueObjectList<_Object_> = class(TmnNamedObjectList<_Object_>)
-    {$else}
     TmnNameValueObjectList<_Object_: TmnNameValueObject> = class(TmnNamedObjectList<_Object_>)
-    {$endif}
     private
+      FAutoRemove: Boolean;
       function GetValues(Index: string): string;
       procedure SetValues(Index: string; AValue: string);
     public
       function Add(Name, Value: string): _Object_; overload;
       property Values[Index: string]: string read GetValues write SetValues; default;
+      property AutoRemove: Boolean read FAutoRemove write FAutoRemove;
     end;
+
+    {$ifdef FPC}
+
+    { INamedObject }
+
+    INamedObject = Interface
+    ['{E8E58D2B-122D-4EA4-9A1A-BC9EE883D957}']
+      function GetName: string;
+      property Name: string read GetName;
+    end;
+
+    { TINamedObjects }
+
+    TINamedObjects<T: INamedObject> = class(TmnObjectList<T>)
+    public
+      function Find(const AName: string): T;
+      function IndexOfName(AName: string): Integer;
+    end;
+
+    {$endif}
 
 implementation
 
@@ -293,6 +318,52 @@ begin
     Result := nil;
 end;
 
+procedure TmnObjectList<_Object_>.QuickSort;
+begin
+  if Count<>0 then
+    QuickSortItems(0, Count - 1);
+end;
+
+procedure TmnObjectList<_Object_>.QuickSortItems(iLo, iHi: Integer);
+var
+  Lo, Hi, Md: integer;
+  p: _Object_;
+begin
+  Lo := iLo;
+  Hi := iHi;
+  Md := (Lo + Hi) div 2;
+  p := Items[ Md ];
+  repeat
+
+    while (Lo < Md) and (Compare(Items[Lo], p) < 0) do
+		  Inc(Lo);
+    while (Hi > Md) and (Compare(Items[Hi], p) > 0) do
+		  Dec(Hi);
+
+    if Lo <= Hi then
+    begin
+      if (Lo<>Hi) then
+      begin
+        //Swap(Lo, Hi);
+        if Compare(Items[Lo], Items[Hi]) <> 0 then
+          Exchange(Lo, Hi);
+      end;
+      Inc(Lo);
+      Dec(Hi);
+    end;
+  until Lo > Hi;
+  if Hi > iLo then
+	  QuickSortItems(iLo, Hi);
+  if Lo < iHi then
+	  QuickSortItems(Lo, iHi);
+end;
+
+function TmnObjectList<_Object_>.Compare(Left, Right: _Object_): Integer;
+begin
+  Result := 0;
+  raise ENotImplemented.Create(ClassName + '.Compare');
+end;
+
 procedure TmnObjectList<_Object_>.Created;
 begin
 end;
@@ -415,7 +486,7 @@ begin
     inherited;
     {$ifdef FPC}
     if Action = lnAdded then
-      FDic.AddOrSetValue(_Object_(Ptr).Name.ToLower, Ptr);
+      FDic.AddOrSetValue(_Object_(Ptr).Name.ToLower, _Object_(Ptr));
     {$else}
     if Action = cnAdded then
       FDic.AddOrSetValue(Value.Name.ToLower, Value);
@@ -469,10 +540,18 @@ var
   itm : _Object_;
 begin
   itm := Find(Index);
-  if itm <> nil then
-    itm.Value := AValue
+  if AutoRemove and (AValue = '') then
+  begin
+    if (itm <> nil) then
+      Remove(itm);
+  end
   else
-    Add(Index, AValue);
+  begin
+    if itm <> nil then
+      itm.Value := AValue
+    else
+      Add(Index, AValue);
+  end;
 end;
 
 function TmnNameValueObjectList<_Object_>.Add(Name, Value: string): _Object_;
@@ -485,7 +564,6 @@ end;
 
 procedure TmnObject.Created;
 begin
-
 end;
 
 procedure TmnObject.AfterConstruction;
@@ -496,11 +574,28 @@ end;
 
 { TmnNameValueObject }
 
+procedure TmnNameValueObject.Assign(FromObject: TObject);
+begin
+  if FromObject is TmnNameValueObject then
+  begin
+    FName := (FromObject as TmnNameValueObject).FName;
+    FValue := (FromObject as TmnNameValueObject).FValue;
+  end
+  else
+    raise Exception.Create('Invalide assign class')
+end;
+
 constructor TmnNameValueObject.Create(const vName, AValue: string);
 begin
   inherited Create;
   Name := vName;
   Value := AValue;
+end;
+
+constructor TmnNameValueObject.CreateFrom(FromObject: TmnNameValueObject);
+begin
+  Create('', '');
+  Assign(FromObject);
 end;
 
 { TmnNamedObject }
@@ -509,6 +604,44 @@ procedure TmnNamedObject.SetName(const Value: string);
 begin
   FName := Value;
 end;
+
+{$ifdef FPC}
+
+{ TNamedObjects }
+
+function TINamedObjects<T>.Find(const AName: string): T;
+var
+  i: integer;
+begin
+  Result := nil;
+	if AName <> '' then
+    for i := 0 to Count - 1 do
+    begin
+      if SameText((Items[i] as INamedObject).GetName, AName) then
+      begin
+        Result := Items[i];
+        break;
+      end;
+    end;
+end;
+
+function TINamedObjects<T>.IndexOfName(AName: string): Integer;
+var
+  i: integer;
+begin
+  Result := -1;
+	if AName <> '' then
+    for i := 0 to Count - 1 do
+    begin
+      if SameText((Items[i] as INamedObject).GetName, AName) then
+      begin
+        Result := i;
+        break;
+      end;
+    end;
+end;
+
+{$endif}
 
 end.
 

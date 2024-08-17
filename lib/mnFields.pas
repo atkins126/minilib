@@ -52,6 +52,11 @@ type
     function GetIField(const FieldName: string): IField;
   end;
 
+  TmncFieldMemory = record
+    Size: Cardinal;
+    Data: PByte;
+  end;
+
   { TmnCustomField }
 
   TmnCustomField = class abstract(TInterfacedPersistent, IField)
@@ -135,6 +140,7 @@ type
     function GetIsNull: Boolean; virtual;
     procedure SetIsNull(const AValue: Boolean); virtual;
     procedure Created; virtual;
+    function GetMemory: TmncFieldMemory; virtual;
   public
     procedure AfterConstruction; override;
 
@@ -183,6 +189,7 @@ type
     procedure Assign(Source: TPersistent); override;
     procedure Clear; virtual;//make value null //should be abstract
     procedure Empty; virtual;//make value empty
+    function Memory: TmncFieldMemory;
 
     //class operator Implicit (f: TprmustomField): Integer; { TODO : when support by delphi }
   end;
@@ -351,6 +358,12 @@ begin
   Result := (Self = nil) or (VarType(Value) in [varEmpty, varNull, varDispatch, varUnknown]);
 end;
 
+function TmnCustomField.GetMemory: TmncFieldMemory;
+begin
+  Result.Size := 0;
+  Result.Data := nil;
+end;
+
 procedure TmnCustomField.LoadFromFile(const FileName: string);
 var
   Stream: TStream;
@@ -366,6 +379,11 @@ end;
 procedure TmnCustomField.LoadFromStream(Stream: TStream);
 begin
   raise Exception.Create('Not implemented yet');
+end;
+
+function TmnCustomField.Memory: TmncFieldMemory;
+begin
+  Result := GetMemory;
 end;
 
 function TmnCustomField.ReadAsBoolean: Boolean;
@@ -809,7 +827,7 @@ end;
 
 procedure TmnCustomField.WriteAsUID(const Value: string);
 begin
-  if Value = '' then
+  if (Value = '')or(Value='0') then //0 fix for integer as uid
     Clear
   else
     AsString := Value;
@@ -820,7 +838,7 @@ begin
   {$ifdef FPC}
   SetAsString(UTF8Decode(AValue));
   {$else}
-  SetAsString(UTF8Decode(AValue));
+  SetAsString(UTF8ToString(AValue));
   {$endif}
 end;
 

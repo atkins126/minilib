@@ -13,11 +13,13 @@ unit mnJSON;
   *
   * }
 
+{$A8,C+,O+,W-,Z1}
+{$STRINGCHECKS OFF}
+
 {$IFDEF FPC}
 {$MODE delphi}
 {$ModeSwitch arrayoperators}
 {$ModeSwitch advancedrecords}
-{$ModeSwitch ArrayOperators}
 {$ModeSwitch typehelpers}
 {$ModeSwitch functionreferences}
 {$ModeSwitch anonymousfunctions}
@@ -36,14 +38,15 @@ interface
 
 uses
 {$IFDEF windows}Windows, {$ENDIF}
-  Classes, SysUtils, StrUtils, DateUtils, Types, Character;
+  Classes, SysUtils, StrUtils, DateUtils, Types, Character,
+  mnUtils;
 
 type
   TJSONParseOption = (
     jsoStrict,
     jsoNoDuplicate,//TODO do not allow duplicate names
-    jsoSafe,
-    jsoUTF8 //TODO
+    jsoSafe, //no Exceptions
+    jsoUTF8 //TODO , no, always UTF8
   );
   TJSONParseOptions = set of TJSONParseOption;
 
@@ -80,6 +83,7 @@ type
         tkNone,
         tkString,
         tkEscape,
+        tkEscapeChar,
         tkNumber,
         tkIdentifire,
         tkReturn //End of line to escape #10
@@ -108,25 +112,28 @@ type
       ColumnNumber: Int64;
 
       Token: TToken;
-      StringBuffer: String;
+      StringBuffer: UTF8String;
+      EscapeBuffer: UTF8String;
       StartString: Integer;
       Index: Integer;
       Options: TJSONParseOptions;
       ErrorMessage: String;
     procedure RaiseError(AError: string; Line: Integer = 0; Column: Integer = 0);
     procedure Push; inline;
-    procedure Pop; inline;
+    procedure Pop; {$ifndef DEBUG}inline; {$endif}
     procedure Next; inline;
     procedure CheckExpected(AExpected: TExpects; AContexts: TContexts = [cxPair, cxArray]); inline;
     procedure Error(const Msg: string); inline;
     procedure ErrorNotExpected(AExpected: TExpects; AContexts: TContexts = [cxPair, cxArray]); //not inline
   public
     procedure Init(AParent: TObject; vAcquireProc: TmnJsonAcquireProc; vOptions: TJSONParseOptions);
-    procedure Parse(const Content: String);
+    procedure Parse(const Content: PByte; Size: Integer; Start: Integer = 0); overload;
+    procedure Parse(const Content: UTF8String); overload;
     procedure Finish;
   end;
 
-procedure JsonParseCallback(const Content: String; AParent: TObject; const AcquireProc: TmnJsonAcquireProc; vOptions: TJSONParseOptions);
+procedure JsonParseCallback(const Content: UTF8String; out Error: string; AParent: TObject; const AcquireProc: TmnJsonAcquireProc; vOptions: TJSONParseOptions);
+function JsonLintFile(const FileName: string; Options: TJSONParseOptions = []): string; //Return Error message
 
 implementation
 
@@ -140,14 +147,16 @@ const
 procedure TmnJSONParser.RaiseError(AError: string; Line: Integer = 0; Column: Integer = 0);
 begin
   if Line > 0 then
-  begin
-    ErrorMessage := AError + ' :: line: ' + Line.ToString + ' column: '+ Column.ToString;
-    raise Exception.Create(ErrorMessage);
-  end
+    ErrorMessage := AError + ' :: line: ' + Line.ToString + ' column: ' + Column.ToString
   else
-    ErrorMessage := AError;
+    ErrorMessage := AError + ' :: column: '+ Column.ToString;
+
   if not (jsoSafe in Options) then
     raise Exception.Create(ErrorMessage)
+  {$ifdef DEBUG}
+{  else if IsConsole then
+    WriteLn(ErrorMessage);}
+  {$endif}
 end;
 
 procedure TmnJSONParser.ErrorNotExpected(AExpected: TExpects; AContexts: TContexts);
@@ -162,9 +171,10 @@ begin
       exValue: Result := Result + ' value';
       exAssign: Result := Result + ' colon `:`';
       exNext: Result := Result + ' comma `,`';
+      exEnd:;
     end;
 
-    RaiseError(Result)
+    Error(Result)
   end;
 
   if not (Context in AContexts) then
@@ -175,7 +185,7 @@ begin
       Error('Expected in Array')
     else
       Error('Expected in Pairs');
-    RaiseError(Result);
+    Error(Result);
   end;
 end;
 
@@ -242,10 +252,18 @@ begin
     Error('Expected EOF');
 end;
 
+procedure TmnJSONParser.Parse(const Content: UTF8String);
+begin
+  Parse(PByte(Content), Length(Content));
+end;
+
 procedure TmnJSONParser.Pop; {$ifdef FPC} inline; {$endif}
 begin
   if StackIndex = 0 then
+  begin
     Error('Expected EOF');
+    exit;
+  end;
   Parent := Stack[StackIndex-1].Parent;
   Context := Stack[StackIndex-1].Context;
   State := Stack[StackIndex-1].State;
@@ -255,37 +273,70 @@ begin
   {$endif}
 end;
 
-procedure TmnJSONParser.Parse(const Content: String);
+procedure TmnJSONParser.Parse(const Content: PByte; Size: Integer; Start: Integer = 0);
 var
+  Ch: UTF8Char;
   AObject: TObject;
 
-var
-  Len: Int64;
-  Ch: Char;
-begin
-  if Content = '' then
-    exit;
+  function CopyString(const Value: PByte; Start, Count: Integer): String; {$ifndef DEBUG}inline; {$endif}
+  begin
+    if Count = 0 then
+      Result := ''
+    else
+    begin
+      //Result := TEncoding.UTF8.GetString(Value, Start, Count);
+      {$ifdef FPC}
+      SetLength(Result, Count);
+      CopyMemory(@Result[1], @Value[Start], Count);
+      {$else}
+      Result := TEncoding.UTF8.GetString(Value, Start, Count);
+      {$endif}
+    end;
+  end;
 
+begin
   if (@AcquireProc = nil) then
     Error('JSON Parser: Acquire is nil');
-  if (Parent = nil) then
-    Error('JSON Parser: Parent is nil');
+{  if (Parent = nil) then //* nope Linting pass nil
+    Error('JSON Parser: Parent is nil');}
 
-  Index := 1;
-  Len := Length(Content);
-
+  Index := Start;
   StartString := -1; //* for strings
 
   Token := tkNone;
   try
     repeat
-      Ch := Content[Index];
+      Ch := UTF8Char(Content[Index]);
       case Token of
         tkReturn:
         begin
           if Ch = #10 then
             Next;
           Token := tkNone;
+        end;
+        tkEscapeChar:
+        begin
+          if Length(EscapeBuffer) < 4 then
+          begin
+            if (jsoStrict in Options) then
+            begin
+              if CharInSet(Ch, [#0, #10, #13]) then
+                Error('End of line in string!');
+            end;
+            EscapeBuffer := EscapeBuffer + Ch;
+            Next;
+        end
+          else
+          begin
+            if EscapeBuffer <> '' then
+            begin
+              StringBuffer := StringBuffer + UTF8Encode({$ifdef FPC}Character{$else}Char{$endif}.ConvertFromUtf32(StrToInt('$'+EscapeBuffer)));
+              EscapeBuffer := '';
+            end;
+            StartString := Index;
+            Token := tkString;
+//            Next;
+          end;
         end;
         tkEscape:
         begin
@@ -303,14 +354,16 @@ begin
             '0': StringBuffer := StringBuffer + #0;
             'u':
             begin
-              //TODO: unicode escape
+              EscapeBuffer := '';
+              Token := tkEscapeChar;
             end
             else
               StringBuffer := StringBuffer + Ch;
           end;
           Next;
           StartString := Index;
-          Token := tkString;
+          if Token = tkEscape then //* not in \u
+            Token := tkString;
         end;
         tkString:
           begin
@@ -319,17 +372,18 @@ begin
               if Expect = exName then
               begin
                 //Creating a Pair Item
-                AcquireProc(Parent, StringBuffer + Copy(Content, StartString, Index - StartString), aqPair, Pair);
+                AcquireProc(Parent, StringBuffer + CopyString(Content, StartString, Index - StartString), aqPair, Pair);
                 Expect := exAssign;
               end
               else if Expect = exValue then
               begin
-                AcquireProc(Parent, StringBuffer + Copy(Content, StartString, Index - StartString), aqString, AObject);
+                AcquireProc(Parent, StringBuffer + CopyString(Content, StartString, Index - StartString), aqString, AObject);
                 Expect := exNext;
               end
               else
                 CheckExpected([exName, exValue], [Context]);
-              StringBuffer := '';
+              if StringBuffer<>'' then
+                StringBuffer := '';
               Token := tkNone;
             end
             else
@@ -342,7 +396,7 @@ begin
 
               if Ch = '\' then
               begin
-                StringBuffer := StringBuffer + Copy(Content, StartString, Index - StartString);
+                StringBuffer := StringBuffer + CopyString(Content, StartString, Index - StartString);
                 StartString := Index + 1;
                 Token := tkEscape;
               end
@@ -358,12 +412,12 @@ begin
               if Expect = exName then
               begin
                 //Creating a Pair Item
-                AcquireProc(Parent, Copy(Content, StartString, Index - StartString), aqPair, Pair);
+                AcquireProc(Parent, CopyString(Content, StartString, Index - StartString), aqPair, Pair);
                 Expect := exAssign;
               end
               else if Expect = exValue then
               begin
-                AcquireProc(Parent, Copy(Content, StartString, Index - StartString), aqIdentifier, AObject);
+                AcquireProc(Parent, CopyString(Content, StartString, Index - StartString), aqIdentifier, AObject);
                 Expect := exNext;
               end
               else
@@ -381,7 +435,7 @@ begin
             begin
               if Expect = exValue then
               begin
-                AcquireProc(Parent, Copy(Content, StartString, Index - StartString), aqNumber, AObject);
+                AcquireProc(Parent, CopyString(Content, StartString, Index - StartString), aqNumber, AObject);
                 Expect := exNext;
               end
               else
@@ -414,7 +468,7 @@ begin
               StartString := Index;
               Token := tkIdentifire;
             end;
-            '-', '+', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+            '-', '+', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9': //may start with . ?
             begin
               CheckExpected([exValue, exEnd]);
               StartString := Index;
@@ -490,14 +544,16 @@ begin
                 Expect := exEnd
               else
                 Expect := exNext;
-            end
+            end;
             else
+            begin
               Error('Illigal character: ' + Ch + ' '+ IntToHex(ord(Ch)));
+            end
           end;
           Next;
         end;
       end;
-    until (Ch=#0) or (Index > Len);
+    until (Ch=#0) or (Index >= Size);
   except
     on E: Exception do
     begin
@@ -509,13 +565,44 @@ begin
   end;
 end;
 
-procedure JsonParseCallback(const Content: String; AParent: TObject; const AcquireProc: TmnJsonAcquireProc; vOptions: TJSONParseOptions);
+procedure JsonParseCallback(const Content: UTF8String; out Error: string; AParent: TObject; const AcquireProc: TmnJsonAcquireProc; vOptions: TJSONParseOptions);
 var
   JSONParser: TmnJSONParser;
 begin
   JSONParser.Init(AParent, AcquireProc, vOptions);
   JSONParser.Parse(Content);
   JSONParser.Finish;
+  Error := JSONParser.ErrorMessage;
+end;
+
+procedure JsonLintAcquireCallback(AParentObject: TObject; const Value: string; const ValueType: TmnJsonAcquireType; out AObject: TObject);
+begin
+  AObject := nil;
+end;
+
+procedure JsonLintString(const S: string; out Error: string; Options: TJSONParseOptions);
+begin
+  try
+    JsonParseCallback(s, Error, nil, JsonLintAcquireCallback, Options);
+  except
+    on E: Exception do
+    begin
+      raise;
+    end;
+  end
+end;
+
+function JsonLintFile(const FileName: string; Options: TJSONParseOptions = []): string; //Return Error message
+begin
+  Result := '';
+  try
+    JsonLintString(LoadFileString(FileName), Result, Options);
+  except
+    on E: Exception do
+    begin
+      Result := E.Message;
+    end;
+  end;
 end;
 
 initialization

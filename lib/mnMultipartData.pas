@@ -1,24 +1,32 @@
 unit mnMultipartData;
-
-{$ifdef FPC}
-{$mode Delphi}
-{$endif}
-{$M+}
-{$H+}
-
+{$M+}{$H+}
+{$ifdef FPC}{$mode delphi}{$endif}
+{**
+ *  This file is part of the "Mini Library"
+ *
+ * @license   modifiedLGPL (modified of http://www.gnu.org/licenses/lgpl.html)
+ *            See the file COPYING.MLGPL, included in this distribution,
+ * @author    Zaher Dirkey <zaher, zaherdirkey>
+ * @author    Belal Hamed <belal, belalhamed@gmail.com>
+ *
+}
 interface
 
 uses
   Classes, SysUtils, IniFiles,
   mnUtils, mnStreams, mnClasses, mnParams,
-  mnLogs, mnStreamUtils;
+  mnStreamUtils;
 
 type
   TmnMultipartData = class;
 
+  { TmnMultipartDataItem }
+
   TmnMultipartDataItem = class abstract(TmnNamedObject)
   private
     FData: TmnMultipartData;
+    FHeader: TmnHeader;
+    procedure SetHeader(const Value: TmnHeader);
   protected
     procedure ReadUntilCallback(vData: TObject; const Buffer; Count: Longint);
 
@@ -30,15 +38,16 @@ type
     procedure DoWrite(vStream: TmnBufferStream); virtual;
     procedure DoRead(const Buffer; Count: Longint); virtual;
     procedure Prepare;
-    function GetValue: string; virtual;
+    function DoGetValue: string; virtual;
+    function GetValue: string;
   public
-    Header: TmnHeader;
     constructor Create(vData: TmnMultipartData);
     destructor Destroy; override;
     procedure Write(vStream: TmnBufferStream);
     function Read(vStream: TmnBufferStream; const vBoundary: utf8string): Boolean;
     property Data: TmnMultipartData read FData;
     property Value: string read GetValue;
+    property Header: TmnHeader read FHeader write SetHeader;
   end;
 
   TmnMultipartDataFileName = class(TmnMultipartDataItem)
@@ -50,7 +59,7 @@ type
 
     procedure DoWrite(vStream: TmnBufferStream); override;
     procedure DoPrepare; override;
-    function GetValue: string; override;
+    function DoGetValue: string; override;
 
   public
     FileName: string;
@@ -64,9 +73,8 @@ type
 
     procedure DoPrepare; override;
     procedure DoWrite(vStream: TmnBufferStream); override;
-    function GetValue: string; override;
+    function DoGetValue: string; override;
   end;
-
 
   TmnMultipartDataMemory = class(TmnMultipartDataItem)
   protected
@@ -87,8 +95,9 @@ type
   TmnMultipartData = class(TmnNamedObjectList<TmnMultipartDataItem>)
   private
     FBoundary: string;
-    FHttpHeader: Boolean;
-    FWorkPath: string;
+    FTempPath: string;
+    function GetData(const Index: string): TmnMultipartDataItem;
+    function GetValues(const Index: string): string;
   protected
     function DoCreateItem(vStream: TmnBufferStream; vHeader: TmnHeader): TmnMultipartDataItem; virtual;
     function CreateItem(vStream: TmnBufferStream): TmnMultipartDataItem;
@@ -98,46 +107,15 @@ type
     function Find(const vName: string): TmnMultipartDataItem;
 
     property Boundary: string read FBoundary write FBoundary;
-    property WorkPath: string read FWorkPath write FWorkPath;
+    property TempPath: string read FTempPath write FTempPath;
+    property Values[const Index: string]: string read GetValues;
+    property Data[const Index: string]: TmnMultipartDataItem read GetData;
   end;
-
-function DocumentToContentType(FileName: string): string;
 
 implementation
 
-function DocumentToContentType(FileName: string): string;
-var
-  Ext: string;
-begin
-  Ext := LowerCase(ExtractFileExt(FileName));
-  if Length(Ext) > 1 then
-    Ext := Copy(Ext, 2, Length(Ext));
-
-  if Ext = 'txt' then
-    Result := 'text/plan'
-  else if (Ext = 'htm') or (Ext = 'html') or (Ext = 'shtml') or (Ext = 'dhtml') then
-    Result := 'text/html'
-  else if Ext = 'gif' then
-    Result := 'image/gif'
-  else if Ext = 'bmp' then
-    Result := 'image/bmp'
-  else if (Ext = 'jpg') or (Ext = 'jpeg') then
-    Result := 'image/jpeg'
-  else if (Ext = 'png') then
-    Result := 'image/png'
-  else if Ext = 'txt' then
-    Result := 'text/plain'
-  else if Ext = 'svg' then
-    Result := 'image/svg+xml'
-  else if Ext = 'css' then
-    Result := 'text/css'
-  else if Ext = 'json' then
-    Result := 'application/json'
-  else if Ext = 'js' then
-    Result := 'text/javascript'
-  else
-    Result := 'application/binary';
-end;
+uses
+  mnMIME;
 
 { TmnMultipartDataItem }
 
@@ -145,13 +123,13 @@ constructor TmnMultipartDataItem.Create(vData: TmnMultipartData);
 begin
   inherited Create;
   FData := vData;
-  //Header := TmnHeader.Create; from new item
+  Header := TmnHeader.Create;
   FData.Add(Self);
 end;
 
 destructor TmnMultipartDataItem.Destroy;
 begin
-  FreeAndNil(Header);
+  FreeAndNil(FHeader);
   inherited;
 end;
 
@@ -162,12 +140,20 @@ end;
 
 function TmnMultipartDataItem.GetValue: string;
 begin
-  Result := '';
+  if Self <> nil then
+    Result := DoGetValue
+  else
+    Result := '';
 end;
 
 procedure TmnMultipartDataItem.Prepare;
 begin
   Header.Values['Content-Disposition'] := Format('form-data; name="%s"', [Name]);
+end;
+
+function TmnMultipartDataItem.DoGetValue: string;
+begin
+  Result := '';
 end;
 
 function TmnMultipartDataItem.Read(vStream: TmnBufferStream; const vBoundary: utf8string): Boolean;
@@ -185,9 +171,15 @@ begin
   DoRead(Buffer, Count);
 end;
 
+procedure TmnMultipartDataItem.SetHeader(const Value: TmnHeader);
+begin
+  if FHeader <> nil then
+    FreeAndNil(FHeader);
+  FHeader := Value;
+end;
+
 procedure TmnMultipartDataItem.DoPrepare;
 begin
-
 end;
 
 procedure TmnMultipartDataItem.DoRead(const Buffer; Count: Longint);
@@ -196,23 +188,22 @@ end;
 
 procedure TmnMultipartDataItem.DoReadPrepare;
 begin
-
 end;
 
 procedure TmnMultipartDataItem.DoReadUnPrepare;
 begin
-
 end;
 
 procedure TmnMultipartDataItem.Write(vStream: TmnBufferStream);
 begin
   Header.WriteHeader(vStream);
-  vStream.WriteLineUTF8('');
+  vStream.WriteUTF8Line('');
   DoWrite(vStream);
-  vStream.WriteLineUTF8('');
+  vStream.WriteUTF8Line('');
 end;
 
 { TmnMultipartData }
+
 procedure CopyString(out S: utf8string; Buffer: Pointer; Len: Integer); inline;
 begin
   if Len <> 0 then
@@ -239,9 +230,9 @@ begin
 
     aDisposition := aHeader['Content-Disposition'];
 
-    if Result=nil then
+    if Result = nil then
     begin
-      if GetSubValue(aDisposition, 'filename', s) and (s<>'') then
+      if GetSubValue(aDisposition, 'filename', s) and (s <> '') then
       begin
         Result := TmnMultipartDataFileName.Create(Self);
         TmnMultipartDataFileName(Result).FileName := s;
@@ -258,6 +249,22 @@ begin
     raise;
   end;
 
+end;
+
+function TmnMultipartData.GetValues(const Index: string): string;
+var
+  item: TmnMultipartDataItem;
+begin
+  item := Find(Index);
+  if item <> nil then
+    Result := item.Value
+  else
+    Result := '';
+end;
+
+function TmnMultipartData.GetData(const Index: string): TmnMultipartDataItem;
+begin
+  Result := Find(Index);
 end;
 
 function TmnMultipartData.DoCreateItem(vStream: TmnBufferStream; vHeader: TmnHeader): TmnMultipartDataItem;
@@ -278,13 +285,12 @@ function TmnMultipartData.Read(vStream: TmnBufferStream): Boolean;
 var
   aItem: TmnMultipartDataItem;
   Matched: Boolean;
-  aDataHeader: TmnHeader;
   aBoundary: utf8string;
   s: utf8string;
 begin
   aBoundary := '--' + UTF8Encode(Boundary);
 
-  vStream.ReadLineUTF8(S, True);
+  vStream.ReadUTF8Line(S, True);
   if s = aBoundary then
   begin
     aBoundary := UTF8Encode(vStream.EndOfLine) + aBoundary;
@@ -299,7 +305,7 @@ begin
         Exit(False);
       end;
 
-      vStream.ReadLineUTF8(S, True);
+      vStream.ReadUTF8Line(S, True);
       if S = '--' then
       begin
         Exit(True);
@@ -314,13 +320,13 @@ function TmnMultipartData.Write(vStream: TmnBufferStream): Boolean;
 var
   itm: TmnMultipartDataItem;
 begin
-
   for itm in Self do
   begin
-    vStream.WriteLineUTF8('--'+Boundary);
+    vStream.WriteUTF8Line('--'+Boundary);
     itm.Write(vStream);
   end;
-  vStream.WriteLineUTF8('--'+Boundary+'--');
+  vStream.WriteUTF8Line('--'+Boundary+'--');
+  Result := True;
 end;
 
 { TmnMultipartDataValue }
@@ -335,17 +341,17 @@ procedure TmnMultipartDataValue.DoRead(const Buffer; Count: Longint);
 var
   s: string;
 begin
-  s := TEncoding.UTF8.GetString(PByte(Buffer), Count);
+  s := StringOfUTF8(PByte(Buffer), Count);
   FValue := FValue + s;
 end;
 
 procedure TmnMultipartDataValue.DoWrite(vStream: TmnBufferStream);
 begin
   inherited;
-  vStream.WriteUTF8(Value);
+  vStream.WriteUTF8String(Value);
 end;
 
-function TmnMultipartDataValue.GetValue: string;
+function TmnMultipartDataValue.DoGetValue: string;
 begin
   Result := FValue;
 end;
@@ -365,11 +371,10 @@ begin
 end;
 
 procedure TmnMultipartDataFileName.DoReadPrepare;
-var
-  f: string;
 begin
-  LocalFileName := IncludePathDelimiter(Data.WorkPath);
-  ForceDirectories(LocalFileName);
+  LocalFileName := IncludePathDelimiter(Data.TempPath);
+  if LocalFileName <> '' then
+    ForceDirectories(LocalFileName);
   LocalFileName := LocalFileName + FileName;
 
   if FileExists(LocalFileName) then
@@ -397,7 +402,7 @@ begin
 
 end;
 
-function TmnMultipartDataFileName.GetValue: string;
+function TmnMultipartDataFileName.DoGetValue: string;
 begin
   Result := LocalFileName;
 end;

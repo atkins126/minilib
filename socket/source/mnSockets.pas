@@ -12,6 +12,19 @@ unit mnSockets;
 
  }
 
+{
+  https://stackoverflow.com/questions/3897883/how-to-detect-an-incoming-ssl-https-handshake-ssl-wire-format
+
+  SSL 3.0 or TLS 1.0, 1.1 and 1.2
+  +-------+------------------+------------------+--------+------
+  | 0x16  | 2 bytes version  |  2 bytes length  |  0x01  |  etc.
+  +-------+------------------+------------------+--------+------
+      b[0] == 0x16 (message type "SSL handshake")
+      b[1] should be 0x03 (currently newest major version, but who knows in future?)
+      b[5] must be 0x01 (handshake protocol message "HelloClient")
+}
+
+
 {$IFDEF FPC}
 {$mode delphi}
 {$ENDIF}
@@ -36,7 +49,7 @@ type
   TmnSocketStates = set of TmnSocketState;
   TmnError = (erSuccess, erTimeout, erClosed, erInvalid);
 
-  TSocketHandle = Integer;
+  TSocketHandle = NativeInt;
 
   TSelectCheck = (slRead, slWrite);
 
@@ -54,9 +67,9 @@ type
     soWaitBeforeWrite, //Wait for ready before write, idk what for
     soCloseTimeout, //close socket if read timeout
     soSSL,  //Use OpenSSL 1.1.1
-    soSSLDebug, //* TODO
-    soWebsocket  //Use OpenSSL 1.1.1
-    );
+    soSSLDebug //* TODO
+  );
+
   TmnsoOptions = set of TmnsoOption;
 
   TmnSocketParams = record //TODO
@@ -75,7 +88,7 @@ type
   private
     FOptions: TmnsoOptions;
     FKind: TSocketKind;
-    FHostAdress: string;
+    FHostAddress: string;
 		FHostName: string;
     function GetConnected: Boolean;
   protected
@@ -93,21 +106,22 @@ type
     function DoListen: TmnError; virtual; abstract;
     function DoSend(const Buffer; var Count: Longint): TmnError; virtual; abstract;
     function DoReceive(var Buffer; var Count: Longint): TmnError; virtual; abstract;
+    function DoPeek(var Buffer; var Count: Longint): TmnError; virtual; abstract;
     function DoPending: Boolean; virtual; abstract;
     function DoClose: TmnError; virtual; abstract;
-    property Options: TmnsoOptions read FOptions;
     property Kind: TSocketKind read FKind;
     property States: TmnSocketStates read FStates;
   public
     Context: TContext; //Maybe Reference to Listener CTX or external CTX
 
-    constructor Create(AHandle: Integer; AOptions: TmnsoOptions; AKind: TSocketKind; AHostAdress: string = ''; AHostName: string = '');
+    constructor Create(AHandle: Integer; AOptions: TmnsoOptions; AKind: TSocketKind; AHostAddress: string = ''; AHostName: string = '');
     destructor Destroy; override;
     procedure EnableSSL;
     procedure Prepare; virtual; //TODO rename Connect;
     function Shutdown(How: TmnSocketStates): TmnError;
     function Close: TmnError;
     function Receive(var Buffer; var Count: Longint): TmnError;
+    function Peek(var Buffer; var Count: Longint): TmnError;
     function Send(const Buffer; var Count: Longint): TmnError;
     function Select(Timeout: Integer; Check: TSelectCheck): TmnError;
 
@@ -122,9 +136,10 @@ type
     function GetRemoteAddress: string; virtual; abstract;
     function GetLocalName: string; virtual; abstract;
     function GetRemoteName: string; virtual; abstract;
+    property Options: TmnsoOptions read FOptions;
     //property Handle: TSocketHandle read FHandle; //I prefer not public it, but i need it into OpenSSL
 
-    property HostAdress: string read FHostAdress;
+    property HostAddress: string read FHostAddress;
 		property HostName: string read FHostName;
   end;
 
@@ -135,15 +150,16 @@ type
   public
     constructor Create; virtual;
     destructor Destroy; override;
+    class constructor Init;
 
-    function GetSocketError(Handle: Integer): Integer; virtual;
+    function GetSocketError(Handle: TSocketHandle): Integer; virtual;
 
     //Bind used by Listener of server
-    procedure Bind(Options: TmnsoOptions; ListenTimeout: Integer; const Port: string; const Address: string; out vSocket: TmnCustomSocket; out vErr: Integer); virtual; abstract;
+    procedure Bind(Options: TmnsoOptions; ListenTimeout: Integer; var Port: string; const Address: string; out vSocket: TmnCustomSocket; out vErr: Integer); virtual; abstract;
     procedure Accept(ListenerHandle: TSocketHandle; Options: TmnsoOptions; ReadTimeout: Integer; out vSocket: TmnCustomSocket; out vErr: Integer); virtual; abstract;
     //Connect used by clients
     procedure Connect(Options: TmnsoOptions; ConnectTimeout, ReadTimeout: Integer; const Port: string; const Address: string; const BindAddress: string; out vSocket: TmnCustomSocket; out vErr: Integer); overload; virtual; abstract;
-    function ResolveIP(Address: string): string; virtual;
+    function ResolveIP(const Address: string): string; virtual;
   end;
 
   { Streams
@@ -225,12 +241,17 @@ begin
   inherited;
 end;
 
-function TmnCustomWallSocket.GetSocketError(Handle: Integer): Integer;
+function TmnCustomWallSocket.GetSocketError(Handle: TSocketHandle): Integer;
 begin
   Result := 0;
 end;
 
-function TmnCustomWallSocket.ResolveIP(Address: string): string;
+class constructor TmnCustomWallSocket.Init;
+begin
+  WallSocket; //create wall socket in case multi server
+end;
+
+function TmnCustomWallSocket.ResolveIP(const Address: string): string;
 begin
   Result := '';
 end;
@@ -246,14 +267,14 @@ begin
   end
 end;
 
-constructor TmnCustomSocket.Create(AHandle: Integer; AOptions: TmnsoOptions; AKind: TSocketKind; AHostAdress: string; AHostName: string);
+constructor TmnCustomSocket.Create(AHandle: Integer; AOptions: TmnsoOptions; AKind: TSocketKind; AHostAddress: string; AHostName: string);
 begin
   inherited Create;
   FOptions := AOptions;
   FKind := AKind;
   FHandle := AHandle;
   FHostName := AHostName;
-  FHostAdress := AHostAdress;
+  FHostAddress := AHostAddress;
 end;
 
 destructor TmnCustomSocket.Destroy;
@@ -284,13 +305,16 @@ begin
 
     SSL := TSSL.Init(Context);
 
-    if (HostName<>'') then
+    if (HostName <> '') then
       SSL.SetHostName(HostName);
 
     SSL.SetSocket(FHandle);
 
     if Kind = skServer then
-      SSL.ServerHandshake
+    begin
+      if not SSL.ServerHandshake then
+        Close;
+    end
     else
     begin
       if not SSL.ClientHandshake then
@@ -376,6 +400,11 @@ begin
     Close;
 end;
 
+function TmnCustomSocket.Peek(var Buffer; var Count: Longint): TmnError;
+begin
+  DoPeek(Buffer, Count);
+end;
+
 function TmnCustomSocket.Pending: Boolean;
 begin
   if SSL.Active then
@@ -429,6 +458,7 @@ begin
     {if SSL.Active then
       SSL.ShutDown;} //nop
     Result := DoShutdown(How);
+
     if Result = erSuccess then
       FStates := FStates + How
     else if Result > erTimeout then

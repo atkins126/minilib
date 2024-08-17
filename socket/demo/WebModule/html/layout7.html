@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html dir="ltr" lang="en">
+    <head>
+        <title>MyHome</title>
+        <link rel="shortcut icon" href="#" />
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <link rel="stylesheet" href="/home/assets/bootstrap.min.css" crossorigin="anonymous">
+        <script src="/home/assets/bootstrap.bundle.min.js" crossorigin="anonymous"></script>
+        <script src="/home/assets/WebElements.js" crossorigin="anonymous"></script>
+        <link rel="stylesheet" href="/home/assets/WebElements.css" crossorigin="anonymous">        
+    </head>
+    <body>
+        <style type="text/css">
+            :root {--sidebar-size: 200pt;}
+        </style>
+
+        <header id="header-1" class="header sticky-top d-flex align-items-center navbar-dark bg-dark shadow-thin py-0 px-1" >
+            <nav id="nav-header" class="navbar flex-nowrap navbar-expand-md navbar-dark bg-dark w-100 px-1">
+
+                <button class="navbar-toggler me-0 ms-0 py-0 px-1 border-0" type="button" data-bs-toggle="offcanvas" data-bs-target="#sidebar-items" aria-controls="sidebar-items" aria-expanded="false" aria-label="Toggle Sidebar">
+                    <span class="carousel-control-next-icon"></span>
+                </button>
+
+                <a class="logo navbar-brand me-auto align-items-center" href="http://localhost:8080/home/">
+                    <img class="" src="/home/assets/logo">
+                    <span class="navbar-brand">Creative Solutions</span>
+                </a>
+
+                <button class="navbar-toggler p-0 border-0" type="button" data-bs-toggle="offcanvas" data-bs-target="#header-items" aria-controls="header-items" aria-expanded="false" aria-label="Toggle navigation">
+                    <span class="navbar-toggler-icon"></span>
+                </button>
+
+                <div id="header-items" class="offcanvas offcanvas-top text-bg-dark" data-bs-scroll="true" data-bs-backdrop="keyboard, static" tabindex="-1">
+                  <div class="offcanvas-body">
+                    <ul class="navbar-nav mr-auto d-flex mb-2 mb-md-0">
+                        <li class="nav-item">
+                            <a href="" class="nav-link">Dashboard</a>
+                        </li>
+                        <li class="nav-item">
+                            <a href="" class="nav-link">About</a>
+                        </li>
+                        <li class="nav-item">
+                            <a href="" class="nav-link">User</a>
+                        </li>
+                    </ul>
+                  </div>
+                </div>
+            </nav>
+        </header>
+
+        <div class="container">
+
+            <div id="content" class="row content flex-nowrap">
+                    <aside id="sidebar" class="sidebar navbar-expand-md">  <!--d-none d-md-block -->
+                        <nav id="sidebar-content" class="sidebar-content fixed">
+                            <div id="sidebar-items" class="sidebar-items p-2 offcanvas offcanvas-start text-bg-dark" data-bs-scroll="true" data-bs-backdrop="keyboard, static" tabindex="-1" >
+                              <div class="offcanvas-body">
+                                <div class="list-group d-flex flex-column">
+                                    <p> Links1 </p>
+                                    <p class="list-group-item">Item 1 "long life is not good"</p>
+                                    <p class="list-group-item">Item 2</p>
+                                    <p class="list-group-item">Item 3</p>
+                                    <p class="list-group-item">Item 4</p>
+                                    <p> Links2 </p>
+                                    <p class="list-group-item">Item 5</p>
+                                    <p class="list-group-item">Item 6</p>
+                                    <p class="list-group-item">Item 7</p>
+                                    <p class="list-group-item">Item 8</p>
+                                </div>
+                            </div>
+                            </div>
+                        </nav>
+                    </aside>
+
+                    <main id="main" class="main col p-1">
+                        <button class="btn btn-primary" type="button" onclick="mnw.showToast('Hello World')">
+                            Show Toast
+                        </button>
+                
+                          <div class="card max-size-1 shadow-sm" id="card-2">
+                                <h5 class="card-header" id="card-2-header">Login</h5>
+                                <div class="card-body collapse show" aria-labelledby="card-2-header" id="card-2-body">
+                                    <form method="post" action="http://localhost:8080/home/login/form-3" enctype="multipart/form-data" id="form-3" name="form-3">
+                                        <label class="form-label" for="username" >Username</label>
+                                        <input class="form-control" id="username" name="username" placeholder="Type user name" type="text" >
+                                        <label class="form-label" for="password" >Password</label>
+                                        <input class="form-control" id="password" name="password" placeholder="" type="password" >
+                                        <div class="form-text">You need to use numbers</div>
+                                        <br>
+                                        <input type="hidden" name="execute" value="true">
+                                    </form>
+                                    <button class="btn btn-success" type="submit" form="form-3" value="Submit">Submit</button>
+                                    <button class="btn btn-primary" type="reset" form="form-3" value="Reset">Reset</button>
+                                </div>
+                            </div>
+                          <div class="card max-size-2 shadow-sm" id="card-2">
+                                <h5 class="card-header" id="card-2-header">Login</h5>
+                                <div class="card-body collapse show" aria-labelledby="card-2-header" id="card-2-body">
+                                    <form method="post" action="http://localhost:8080/home/login/form-3" enctype="multipart/form-data" id="form-3" name="form-3">
+                                        <label class="form-label" for="username" >Username</label>
+                                        <input class="form-control" id="username" name="username" placeholder="Type user name" type="text" >
+                                        <label class="form-label" for="password" >Password</label>
+                                        <input class="form-control" id="password" name="password" placeholder="" type="password" >
+                                        <div class="form-text">You need to use numbers</div>
+                                        <br>
+                                        <input type="hidden" name="execute" value="true">
+                                    </form>
+                                    <button class="btn btn-success" type="submit" form="form-3" value="Submit">Submit</button>
+                                    <button class="btn btn-primary" type="reset" form="form-3" value="Reset">Reset</button>
+                                </div>
+                            </div>
+                          <div class="card shadow-sm" id="card-2">
+                                <h5 class="card-header" id="card-2-header">Login</h5>
+                                <div class="card-body collapse show" aria-labelledby="card-2-header" id="card-2-body">
+                                    <form method="post" action="http://localhost:8080/home/login/form-3" enctype="multipart/form-data" id="form-3" name="form-3">
+                                        <label class="form-label" for="username" >Username</label>
+                                        <input class="form-control" id="username" name="username" placeholder="Type user name" type="text" >
+                                        <label class="form-label" for="password" >Password</label>
+                                        <input class="form-control" id="password" name="password" placeholder="" type="password" >
+                                        <div class="form-text">You need to use numbers</div>
+                                        <br>
+                                        <input type="hidden" name="execute" value="true">
+                                    </form>
+                                    <button class="btn btn-success" type="submit" form="form-3" value="Submit">Submit</button>
+                                    <button class="btn btn-primary" type="reset" form="form-3" value="Reset">Reset</button>
+                                </div>
+                            </div>
+                          <div class="card shadow-sm" id="card-2">
+                                <h5 class="card-header" id="card-2-header">Login</h5>
+                                <div class="card-body collapse show" aria-labelledby="card-2-header" id="card-2-body">
+                                    <form method="post" action="http://localhost:8080/home/login/form-3" enctype="multipart/form-data" id="form-3" name="form-3">
+                                        <label class="form-label" for="username" >Username</label>
+                                        <input class="form-control" id="username" name="username" placeholder="Type user name" type="text" >
+                                        <label class="form-label" for="password" >Password</label>
+                                        <input class="form-control" id="password" name="password" placeholder="" type="password" >
+                                        <div class="form-text">You need to use numbers</div>
+                                        <br>
+                                        <input type="hidden" name="execute" value="true">
+                                    </form>
+                                    <button class="btn btn-success" type="submit" form="form-3" value="Submit">Submit</button>
+                                    <button class="btn btn-primary" type="reset" form="form-3" value="Reset">Reset</button>
+                                </div>
+                            </div>
+                          <div class="card shadow-sm" id="card-2">
+                                <h5 class="card-header" id="card-2-header">Login</h5>
+                                <div class="card-body collapse show" aria-labelledby="card-2-header" id="card-2-body">
+                                    <form method="post" action="http://localhost:8080/home/login/form-3" enctype="multipart/form-data" id="form-3" name="form-3">
+                                        <label class="form-label" for="username" >Username</label>
+                                        <input class="form-control" id="username" name="username" placeholder="Type user name" type="text" >
+                                        <label class="form-label" for="password" >Password</label>
+                                        <input class="form-control" id="password" name="password" placeholder="" type="password" >
+                                        <div class="form-text">You need to use numbers</div>
+                                        <br>
+                                        <input type="hidden" name="execute" value="true">
+                                    </form>
+                                    <button class="btn btn-success" type="submit" form="form-3" value="Submit">Submit</button>
+                                    <button class="btn btn-primary" type="reset" form="form-3" value="Reset">Reset</button>
+                                </div>
+                            </div>
+                   </main>
+                </div>
+        </div>
+        <div id="toast-container" class ="toast-container position-fixed bottom-0 end-0 p-3" style="z-index:11;">
+        </div>
+    </body>
+</html>

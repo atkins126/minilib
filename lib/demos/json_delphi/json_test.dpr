@@ -1,13 +1,14 @@
 program json_test;
 
+{$A8,B-,C+,E-,F-,G+,H+,I+,J-,K-,M-,N-,O+,P+,Q-,R-,S-,T-,U-,V+,W-,X+,Z1}
 {$APPTYPE CONSOLE}
 
 {$R *.res}
 
 uses
   System.SysUtils, Windows, Classes,
-  Json, ioUtils,
-  mnUtils, prmClasses, mnConfigs,
+  Json, ioUtils, mnLogs,
+  mnUtils, prmClasses, mnConfigs, pmpUtils, pmpClasses,
   mnFields,
   mnDON, mnJSON;
 
@@ -124,6 +125,29 @@ begin
 end;
 {$endif}
 
+procedure Run2;
+begin
+  var m := TMemoryStream.Create;
+  var Serializer := TStreamSerializer.Create(m, True);
+  var j := TDON_Object_Value.Create(nil);
+  try
+    j.AddPair('name', '„Õ„œ');
+    j.AddPair('code', '01025');
+
+    Serializer.Options := [sroCompact];
+    Serializer.Serialize(TJsonSerializeGernerator, j);
+    //JSon4.Serialize(Writer, True, 0);
+
+    var s:= TEncoding.Unicode.GetString(PByte(m.Memory), m.Size);
+    Writeln(s);
+
+  finally
+    Serializer.Free;
+    j.Free;
+    m.Free;
+  end;
+end;
+
 procedure Run;
 var
   Lines: TStringList;
@@ -142,14 +166,34 @@ begin
   try
     Lines := TStringList.Create;
     try
+      JsonLintFile(FileName);
       WriteLn('Loading: ' + FileName);
       Lines.LoadFromFile(FileName);
-      var s := Lines.Text;
+      var s : UTF8String := Lines.Text;
 
       LogBeginTick;
       var Json3 := JsonParseStringValue(s);
       LogEndTick('Test mnJSON');
       Json3.Free;
+
+      LogBeginTick;
+      var jjj := json.TJSONObject.ParseJSONValue(s);
+      LogEndTick('Test Delphi Json');
+
+      LogBeginTick;
+      var ss := jjj.ToString;
+      LogEndTick('Test Delphi ToString');
+
+      LogBeginTick;
+      var m := TMemoryStream.Create;
+      jjj.SaveToStream(m, False);
+      LogEndTick('Test Delphi save stream');
+      m.SaveToFile('c:\temp\1.json');
+      m.Free;
+      jjj.Free;
+
+      Exit;
+
 
       LogBeginTick;
       var d_json := json.TJSONObject.Create;
@@ -240,11 +284,14 @@ begin
 end;
 
 begin
+  ReportMemoryLeaksOnShutdown := True;
   Application := TObject.Create;
+  InstallConsoleLog;
   //HookCode(@TObject.NewInstance, @HookedObjectNewInstance);
   //HookCode(@TObject.FreeInstance, @HookedObjectFreeInstance);
   try
     try
+      //Run2;
       Run;
     except
       on E: Exception do

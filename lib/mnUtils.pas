@@ -37,7 +37,7 @@ procedure Nothing;
 {
   StrHave: test the string if it have Separators
 }
-function QuoteStr(Str: string; QuoteChar: string = '"'): string;
+function QuoteStr(Str: string; const QuoteChar: string = '"'): string;
 
 {**
   Resume: if false then stop, default is true
@@ -45,6 +45,7 @@ function QuoteStr(Str: string; QuoteChar: string = '"'): string;
 type
   TStrToStringsCallbackProc = procedure(Sender: Pointer; Index: Integer; S: string; var Resume: Boolean);
   TStrToStringsExCallbackProc = procedure(Sender: Pointer; Index, CharIndex, NextIndex: Integer; S: string; var Resume: Boolean);
+
   TArgumentsCallbackProc = procedure(Sender: Pointer; Index: Integer; Name, Value: string; IsSwitch:Boolean; var Resume: Boolean);
 
 {**
@@ -97,14 +98,14 @@ type
 //*  -t --test cmd1 cmd2 -t: value -t:value -t value
 function ParseArgumentsCallback(const Content: string; const CallBackProc: TArgumentsCallbackProc; Sender: Pointer; Switches: TArray<Char>{['-', '/']}; Options: TParseArgumentsOptions = [pargKeepSwitch, pargDeqoute]; Terminals: TSysCharSet = [' ', #9]; WhiteSpaces: TSysCharSet = [' ', #9]; Quotes: TSysCharSet = ['''', '"'];  ValueSeperators: TSysCharSet = [':', '=']): Integer; overload;
 
-//*
 function ParseArguments(const Content: string; Strings: TStrings; Switches: TArray<Char>; Options: TParseArgumentsOptions = [pargKeepSwitch, pargDeqoute]; Terminals: TSysCharSet = [' ', #9]; WhiteSpaces: TSysCharSet = [' ', #9]; Quotes: TSysCharSet = ['''', '"'];  ValueSeperators: TSysCharSet = [':', '=']): Integer; overload;
-
-//* Skip first param
-function ParseCommandLine(Content: string; Strings: TStrings; Switches: TArray<Char>; WhiteSpaces: TSysCharSet = [' ', #9]; Quotes: TSysCharSet = ['''', '"'];  ValueSeperators: TSysCharSet = [':', '=']): Integer; overload;
-
 function GetSubValue(const Content, Name: string; out Value: string; Terminals: TSysCharSet = [';']; WhiteSpaces: TSysCharSet = [' ',#9]; Quotes: TSysCharSet = ['"']; ValueSeperators: TSysCharSet = ['=']): Boolean; overload;
+//*
 
+
+//Parse ParamStr to Strings
+procedure ParseCommandArguments(CallBackProc: TArgumentsCallbackProc; Sender: Pointer; KeyValues: TArray<string> = []); overload;
+procedure ParseCommandArguments(Arguments: TStrings; KeyValues: TArray<string> = []); overload;
 
 {
   param1 param2 -s -w: value
@@ -115,8 +116,9 @@ function GetSubValue(const Content, Name: string; out Value: string; Terminals: 
   -w=value
 }
 
-function GetArgumentValue(Strings: TStrings; out Value: String; Switch: string; AltSwitch: string = ''): Boolean; overload;
-function GetArgumentSwitch(Strings: TStrings; Switch: string; AltSwitch: string = ''): Boolean; overload;
+//SwitchName: Use switch char too, like `-demon`
+function GetArgumentValue(Strings: TStrings; out Value: String; SwitchName: string; AltSwitchName: string = ''): Boolean; overload;
+function GetArgumentSwitch(Strings: TStrings; SwitchName: string; AltSwitchName: string = ''): Boolean; overload;
 
 //Get Param (non switch value by index)
 function GetArgument(Strings: TStrings; out Value: String; Index: Integer): Boolean; overload;
@@ -152,20 +154,19 @@ function CharArrayToSet(const ArrayOfChar : TArray<Char>) : TSysCharSet;
 function PeriodToString(vPeriod: Double; WithSeconds: Boolean): string;
 //Used by GetTickCount, return minuts,secons,miliseconds
 function TicksToString(vTicks: Int64): string;
-function DequoteStr(const Str: string; QuoteChar: string = #0): string;
-function ExcludeTrailing(const Str: string; TrailingChar: string = #0): string;
+function DequoteStr(const Str: string; const QuoteChar: string = #0): string;
+function ExcludeTrailing(const Str: string; const TrailingChar: string = #0): string;
 function RemoveEncloseStr(const S, Left, Right: string): string;
 function EncloseStr(const S, Left, Right: string): string;
 
 function RepeatString(const Str: string; Count: Integer): string;
 
-function ConcatString(const S1, Delimiter: string; S2: string = ''): string;
+function ConcatString(const S1, Delimiter: string; const S2: string = ''): string; overload;
 function CollectStrings(Strings: TStrings; Delimiter: Char = ','; TrailingChar: Char = #0): string; overload;
 function CollectStrings(Strings: array of string; Delimiter: Char = ','; TrailingChar: Char = #0): string; overload;
 
 function ReversePos(const SubStr, S : String): Integer; overload;
 function ReversePos(const SubStr, S: String; const Start: Integer): Integer; overload;
-
 
 {* VarReplace
   VarInit = '$'
@@ -185,18 +186,6 @@ type
   TAlignStrOptions = set of (alsLeft, alsRight, alsCut); {TODO left+right=center TODO use righttoleft}
 
 function AlignStr(const S: string; Count: Integer; Options: TAlignStrOptions = [alsLeft]; vChar: Char = ' '): string; overload;
-
-{
-  Useful to make your project path related (Portable)
-  FileName:
-          ./myfile
-          ../myfile
-          /myfile
-          \myfile
-  Path:
-  Root: is optional, added before Path
-}
-function ExpandToPath(FileName: string; Path: string; Root: string = ''): string;
 
 function StartsDelimiter(const vFileName: string): Boolean;
 function EndsDelimiter(const vFileName: string): Boolean;
@@ -220,14 +209,26 @@ const
   cDefEscapeStrings = ['b', 't', 'n', 'r', '\', '"'];
   cDefEscapePrefix = '\';
 
-function EscapeString(const S: string; Esc: string; Chars: array of Char; Escapes: array of string): string;
-function DescapeString(const S: string; Esc: string; Chars: array of Char; Escapes: array of string): string;
+function EscapeString(const S: string; const Esc: string; Chars: array of Char; const Escapes: array of string): string;
+function DescapeString(const S: string; const Esc: string; Chars: array of Char; const Escapes: array of string): string;
 
 function EscapeStringC(const S: string): string;
 function DescapeStringC(const S: string): string;
 function ToUnixPathDelimiter(const S: string): string;
 function CorrectPath(const Path: string): string;
 function ExpandFile(const Name: string): string;
+
+{
+  Useful to make your project path related (Portable)
+  FileName:
+          ./myfile
+          ../myfile
+          /myfile
+          \myfile
+  Path:
+  Root: is optional, added before Path
+}
+function ExpandToPath(FileName: string; Path: string; Root: string = ''): string;
 
 //TODO pascal
 //function EscapeStringPas(const S: string): string;
@@ -236,7 +237,7 @@ function ExpandFile(const Name: string): string;
 //IncludePathDelimiter add the Delimiter when S not = ''
 function IncludePathDelimiter(const S: string): string;
 function ExcludePathDelimiter(Path: string): string;
-function IncludeURLDelimiter(S: string): string;
+function IncludeURLDelimiter(const S: string): string;
 
 //Similer to ZeroMemory
 procedure InitMemory(out V; Count: {$ifdef FPC}SizeInt{$else}Longint{$endif});
@@ -261,16 +262,20 @@ function IsAllLowerCase(S: string): Boolean;
 type
   TEncodingHelper = class helper for TEncoding
   public
-    function GetString(Bytes: PByte; ByteCount: Integer): String; overload;
+    function GetString(Bytes: PByte; ByteCount: Integer): String; overload; inline;
+    function GetString(Bytes: PByte; Start, ByteCount: Integer): String; overload; inline;
     class function CodePageEncoding(CodePage: Word): TEncoding;
     {$ifdef FPC}
     function GetString(Bytes: array of Byte): String; overload;
     {$endif}
   end;
 
-function StringOf(const Value: Array of Byte; CodePage: Word = CP_UTF8): string; overload;
-function StringOf(const Value: TBytes; CodePage: Word = CP_UTF8): string; overload;
-function StringOf(const Value: PByte; Size: Integer; CodePage: Word = CP_UTF8): string; overload;
+function StringOf(const Value: Array of Byte; CodePage: Word = CP_UTF8): string; overload; deprecated;
+function StringOf(const Value: TBytes; CodePage: Word = CP_UTF8): string; overload; deprecated;
+function StringOf(const Value: PByte; Size: Integer; CodePage: Word = CP_UTF8): string; overload; deprecated;
+function StringOf(const Value: PByte; Start, Size: Integer; CodePage: Word = CP_UTF8): string; overload; deprecated;
+
+function StringOfUTF8(const Value: PByte; Size: Integer): string;
 
 //TODO fix ansi to widestring
 function HexToBin(Text : PByte; Buffer: PByte; BufSize: longint): Integer; overload;
@@ -278,6 +283,9 @@ procedure BinToHex(Buffer: PByte; Text: PByte; BufSize: longint); overload;
 function String2Hex(const vData: string): string; overload;
 function String2Hex(const vData: PByte; vCount: Integer): string; overload;
 function Hex2String(const vData: string): string; overload;
+
+function ByteToBinStr(Value: Byte): string;
+function DataToBinStr(var Data; Size: Integer; Separator: string = ''): string;
 
 //Files Utils
 
@@ -290,6 +298,7 @@ procedure EnumFiles(FileList: TStrings; const Folder, Filter: string; Options: T
 function FirstFile(const Path, Files: string): string;
 function DeleteFiles(const Path, Files: string): Integer;
 function GetSizeOfFile(const vFile: string): Int64; //GetFileSize
+function LoadFileString(FileName: string): string;
 
 //mnMulDiv not using windows unit
 function mnMulDiv(nNumber, nNumerator, nDenominator: Integer): Integer; overload;
@@ -297,6 +306,11 @@ function mnMulDiv(nNumber, nNumerator, nDenominator: Int64): Int64; overload;
 //propblem round(10.5) -> 10
 function mnRound(nNumber: Double): Int64; overload;
 
+procedure SwapBytes(const Source; out Dest; Size: Integer); overload;
+function SwapBytes(const Source: Word): Word; overload;
+function SwapBytes(const Source: SmallInt): SmallInt; overload;
+function SwapBytes(const Source: Cardinal): Cardinal; overload;
+function SwapBytes(const Source: Int64): Int64; overload;
 
 var
   SystemAnsiCodePage: Cardinal; //used to convert from Ansi string, it is the default
@@ -330,7 +344,7 @@ begin
   end;
 end;
 
-function QuoteStr(Str: string; QuoteChar: string): string;
+function QuoteStr(Str: string; const QuoteChar: string): string;
 begin
   if Str = '' then
     Result := QuoteChar + QuoteChar
@@ -351,7 +365,7 @@ begin
   end;
 end;
 
-function DequoteStr(const Str: string; QuoteChar: string = #0): string;
+function DequoteStr(const Str: string; const QuoteChar: string = #0): string;
 begin
   if Str = '' then
     Result := ''
@@ -383,7 +397,7 @@ begin
   end;
 end;
 
-function ExcludeTrailing(const Str: string; TrailingChar: string = #0): string;
+function ExcludeTrailing(const Str: string; const TrailingChar: string = #0): string;
 begin
   if (TrailingChar > #0) and (RightStr(Str, 1) = TrailingChar) then
     Result := MidStr(Str, 1, Length(Str) - 1)
@@ -456,7 +470,7 @@ begin
   end;
 end;
 
-function ConcatString(const S1, Delimiter: string; S2: string): string;
+function ConcatString(const S1, Delimiter: string; const S2: string): string;
 begin
   Result := S1;
   if (Result <> '') and (S2 <> '') then
@@ -1044,22 +1058,82 @@ begin
   Result := ParseArgumentsCallback(Content, @ArgumentsCallbackProc, Strings, Switches, Options, Terminals, WhiteSpaces, Quotes, ValueSeperators);
 end;
 
-procedure CommandLineCallbackProc(Sender: Pointer; Index: Integer; Name, Value: string; IsSwitch: Boolean; var Resume: Boolean);
+procedure ParseCommandArguments(CallBackProc: TArgumentsCallbackProc; Sender: Pointer; KeyValues: TArray<string>);
+var
+  Resume: Boolean;
+  NextIsValue: Boolean;
+  Name, Value: string;
+  i, c, idx: Integer;
 begin
-  if Index > 0 then //ignore first param (exe file)
-    ArgumentsCallbackProc(Sender, Index, Name, Value, IsSwitch, Resume);
+  NextIsValue := False;
+  c := 0;
+  for i := 1 to ParamCount do
+  begin
+    //-----------
+    if NextIsValue then
+    begin
+      Value := ParamStr(i);
+      NextIsValue := False;
+    end
+    else
+    begin
+      Name := ParamStr(i);
+      Value := '';
+
+      if StartsText('/', Name) then
+        Name := '-' + Copy(Name, 2, MaxInt)
+      else if StartsText('--', Name) then
+        Name := Copy(Name, 2, MaxInt);
+
+      if EndsText('=', Name) or EndsText(':', Name) then
+      begin
+        Name := Copy(Name, 1, Length(Name)-1);
+        NextIsValue := True;
+      end
+      else if StrInArray(Name, KeyValues) then
+        NextIsValue := True
+      else
+      begin
+        idx := Pos('=', Name);
+        if idx<>0 then
+        begin
+          Value := Copy(Name, idx+1, MaxInt);
+          Name := Copy(Name, 1, idx-1);
+        end;
+      end;
+    end;
+
+    if not NextIsValue then
+    begin
+      //Arguments.Add(arg);
+
+      Resume := True;
+      CallBackProc(Sender, c, Name, Value, StartsText('-', Name), Resume);
+      c := c + 1;
+      if not Resume then
+        break;
+      Name := '';
+    end;
+  end;
+
+  if Name <> '' then
+    CallBackProc(Sender, c, Name, Value, StartsText('-', Name), Resume)
 end;
 
-function ParseCommandLine(Content: string; Strings: TStrings; Switches: TArray<Char>; WhiteSpaces: TSysCharSet; Quotes: TSysCharSet; ValueSeperators: TSysCharSet): Integer;
+procedure ParseCommandArguments(Arguments: TStrings; KeyValues: TArray<string>);
 begin
-  Result := ParseArgumentsCallback(Content, @CommandLineCallbackProc, Strings, Switches, [pargKeepSwitch, pargDeqoute], WhiteSpaces, WhiteSpaces, Quotes, ValueSeperators);
+  ParseCommandArguments(ArgumentsCallbackProc, Arguments, KeyValues);
 end;
 
-function GetArgumentValue(Strings: TStrings; out Value: String; Switch: string; AltSwitch: string = ''): Boolean;
+function GetArgumentValue(Strings: TStrings; out Value: String; SwitchName: string; AltSwitchName: string = ''): Boolean;
 var
   I, P: Integer;
   S: string;
 begin
+  if StartsText('--', SwitchName) then
+    SwitchName := Copy(SwitchName, 2, MaxInt);
+  if StartsText('--', AltSwitchName) then
+    AltSwitchName := Copy(AltSwitchName, 2, MaxInt);
   Result := False;
   Value := '';
   for I := 0 to Strings.Count - 1 do
@@ -1068,8 +1142,8 @@ begin
     P := Pos(Strings.NameValueSeparator, S);
     if (P <> 0) then
     begin
-      if (SameText(Copy(S, 1, P - 1), Switch))
-        or ((AltSwitch <> '') and (SameText(Copy(S, 1, P - 1), AltSwitch))) then
+      if (SameText(Copy(S, 1, P - 1), SwitchName))
+        or ((AltSwitchName <> '') and (SameText(Copy(S, 1, P - 1), AltSwitchName))) then
         begin
           Value := Copy(S, p + 1, MaxInt);
           Exit(True);
@@ -1078,12 +1152,16 @@ begin
   end;
 end;
 
-function GetArgumentSwitch(Strings: TStrings; Switch: string; AltSwitch: string = ''): Boolean; overload;
+function GetArgumentSwitch(Strings: TStrings; SwitchName: string; AltSwitchName: string = ''): Boolean; overload;
 var
   I, P: Integer;
   S: string;
 begin
   Result := False;
+  if StartsText('--', SwitchName) then
+    SwitchName := Copy(SwitchName, 2, MaxInt);
+  if StartsText('--', AltSwitchName) then
+    AltSwitchName := Copy(AltSwitchName, 2, MaxInt);
   for I := 0 to Strings.Count - 1 do
   begin
     S := Strings[I];
@@ -1093,11 +1171,10 @@ begin
     else
       S := Copy(S, 1, MaxInt);
 
-    if SameText(S, Switch) or ((AltSwitch <> '') and (SameText(S, AltSwitch))) then
+    if SameText(S, SwitchName) or ((AltSwitchName <> '') and (SameText(S, AltSwitchName))) then
       Exit(True);
   end;
 end;
-
 
 function GetArgument(Strings: TStrings; out Value: String; Index: Integer): Boolean;
 var
@@ -1260,7 +1337,7 @@ begin
   end;
 end;
 
-function EscapeString(const S: string; Esc: string; Chars: array of Char; Escapes: array of string): string;
+function EscapeString(const S: string; const Esc: string; Chars: array of Char; const Escapes: array of string): string;
   function InChars(const Char: Char): Integer;
   var
     i: Integer;
@@ -1317,7 +1394,7 @@ begin
   end;
 end;
 
-function DescapeString(const S: string; Esc: string; Chars: array of Char; Escapes: array of string): string;
+function DescapeString(const S: string; const Esc: string; Chars: array of Char; const Escapes: array of string): string;
   function InEscape(Start: Integer): Integer;
   var
     i: Integer;
@@ -1515,7 +1592,7 @@ end;
 
 function SubStr(const Str: String; vSeperator: Char; vIndex: Integer): String;
 begin
-  if Str='' then
+  if Str = '' then
     Result := ''
   else
     Result := SubStr(Str, vSeperator, vIndex, vIndex);
@@ -1674,15 +1751,15 @@ end;
 
 function IncludePathDelimiter(const S: string): string;
 begin
-  if (s <> '') and (RightStr(S, 1) <> PathDelim) then
+  if (s <> '') and not EndsStr(PathDelim, s) then
     Result := s + PathDelim
   else
     Result := s;
 end;
 
-function IncludeURLDelimiter(S: string): string;
+function IncludeURLDelimiter(const S: string): string;
 begin
-  if (s <> '') and (RightStr(S, 1) <> '/') then
+  if (s <> '') and not EndsStr('/', S) then
     Result := S + '/'
   else
     Result := S;
@@ -1838,7 +1915,7 @@ var
   aLen: Integer;
 begin
   Result := '';
-  if ByteCount<>0 then
+  if ByteCount <> 0 then
   begin
     aLen := GetCharCount(Bytes, ByteCount);
     if (aLen <>0) then
@@ -1852,6 +1929,15 @@ begin
     end;
   end
 end;
+
+function TEncodingHelper.GetString(Bytes: PByte; Start, ByteCount: Integer): String;
+begin
+  if ByteCount<>0 then
+    Result := GetString(@Bytes[Start], ByteCount)
+  else
+    Result := '';
+end;
+
 
 {$ifdef FPC}
 function TEncodingHelper.GetString(Bytes: array of Byte): String;
@@ -1875,6 +1961,11 @@ begin
   Result := TEncoding.CodePageEncoding(CodePage).GetString(Value, Size);
 end;
 
+function StringOf(const Value: PByte; Start, Size: Integer; CodePage: Word = CP_UTF8): string; overload;
+begin
+  Result := StringOf(@Value[Start], Size, CodePage);
+end;
+
 function StringOf(const Value: array of Byte; CodePage: Word): string;
 begin
   Result := TEncoding.CodePageEncoding(CodePage).GetString(Value);
@@ -1883,6 +1974,17 @@ end;
 function StringOf(const Value: TBytes; CodePage: Word): string;
 begin
   Result := TEncoding.CodePageEncoding(CodePage).GetString(Value);
+end;
+
+function StringOfUTF8(const Value: PByte; Size: Integer): string;
+begin
+  {$ifdef FPC}
+  if Size = 0 then
+    exit('');
+  SetString(Result, PChar(Value), Size);
+  {$else}
+  Result := TEncoding.UTF8.GetString(Value, Size);
+  {$endif}
 end;
 
 function Hex2String(const vData: string): string; overload;
@@ -1951,6 +2053,35 @@ begin
     Inc(p);
     P^ := Convert[Buffer[I] and $F];
     Inc(p);
+  end;
+end;
+
+function ByteToBinStr(Value: Byte): string;
+var
+  i: Integer;
+begin
+  SetLength(Result, 8);
+  for i := 1 to 8 do begin
+    if (Value shr (8-i)) and 1 = 0 then begin
+      Result[i] := '0'
+    end else begin
+      Result[i] := '1';
+    end;
+  end;
+end;
+
+function DataToBinStr(var Data; Size: Integer; Separator: string): string;
+var
+  P: PByte;
+begin
+  Result := '';
+  P := @Data;
+  while Size > 0 do
+  begin
+    Dec(Size);
+    if (Result <> '') then
+      Result := Result + Separator;
+    Result := Result + ByteToBinStr(P[Size]);
   end;
 end;
 
@@ -2042,6 +2173,19 @@ begin
   end;
 end;
 
+function LoadFileString(FileName: string): string;
+var
+  Stream : TStringStream;
+begin
+  Stream := TStringStream.Create('' , TUTF8Encoding.Create);
+  try
+    Stream.LoadFromFile(FileName);
+    Result := Stream.DataString;
+  finally
+    Stream.Free;
+  end;
+end;
+
 function mnMulDiv(nNumber, nNumerator, nDenominator: Integer): Integer;
 const
   Size = SizeOf(Integer);
@@ -2110,9 +2254,44 @@ begin
     else
       Inc(Result);
   end;
-
 end;
 
+
+procedure SwapBytes(const Source; out Dest; Size: Integer); overload;
+var
+  PSource: PByte;
+  PDest: PByte;
+  I: Integer;
+begin
+  PSource := PByte(@Source);
+  PDest:= PByte(@Dest);
+
+  for I := 0 to Size - 1 do
+  begin
+    PDest^ := PSource[Size - I - 1];
+    Inc(PDest);
+  end;
+end;
+
+function SwapBytes(const Source: Word): Word; overload;
+begin
+  SwapBytes(Source, Result, SizeOf(Result));
+end;
+
+function SwapBytes(const Source: SmallInt): SmallInt; overload;
+begin
+  SwapBytes(Source, Result, SizeOf(Result));
+end;
+
+function SwapBytes(const Source: Cardinal): Cardinal; overload;
+begin
+  SwapBytes(Source, Result, SizeOf(Result));
+end;
+
+function SwapBytes(const Source: Int64): Int64; overload;
+begin
+  SwapBytes(Source, Result, SizeOf(Result));
+end;
 
 initialization
   {$ifdef windows}

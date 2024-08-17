@@ -32,8 +32,12 @@ type
   protected
     function GetActive: Boolean; override;
 
+    function ReceiveData(var Buffer; var Count: Longint; vFlag: Integer): TmnError;
+
     function DoReceive(var Buffer; var Count: Longint): TmnError; override;
+    function DoPeek(var Buffer; var Count: Integer): TmnError; override;
     function DoSend(const Buffer; var Count: Longint): TmnError; override;
+
     //Timeout millisecond
     function DoSelect(Timeout: Integer; Check: TSelectCheck): TmnError; override;
     function DoShutdown(How: TmnSocketStates): TmnError; override;
@@ -52,7 +56,6 @@ type
   TmnWallSocket = class(TmnCustomWallSocket)
   private
     FWSAData: TWSAData;
-    FCount: Integer;
     function LookupPort(Port: string): Word;
   protected
     procedure FreeSocket(var vHandle: TSocketHandle);
@@ -62,18 +65,16 @@ type
     destructor Destroy; override;
     function GetSocketError(Handle: TSocketHandle): Integer; override;
     procedure Accept(ListenerHandle: TSocketHandle; Options: TmnsoOptions; ReadTimeout: Integer; out vSocket: TmnCustomSocket; out vErr: Integer); override;
-    procedure Bind(Options: TmnsoOptions; ListenTimeout: Integer; const Port: string; const Address: string; out vSocket: TmnCustomSocket; out vErr: Integer); override;
+    procedure Bind(Options: TmnsoOptions; ListenTimeout: Integer; var Port: string; const Address: string; out vSocket: TmnCustomSocket; out vErr: Integer); override;
     procedure Connect(Options: TmnsoOptions; ConnectTimeout, ReadTimeout: Integer; const Port: string; const Address: string; const BindAddress: string; out vSocket: TmnCustomSocket; out vErr: Integer); override;
-    function ResolveIP(Address: string): string; override;
-    procedure Startup;
-    procedure Cleanup;
+    function ResolveIP(const Address: string): string; override;
   end;
 
 implementation
 
 const
   cBacklog = 5;
-  INVALID_SOCKET: Integer = -1;
+  INVALID_SOCKET: TSocketHandle = TSocketHandle(-1);
   SO_TRUE: Longbool = True;
 //  SO_FALSE:Longbool=False;
   TCP_QUICKACK = 12; //Some one said it is work on windows too
@@ -132,6 +133,11 @@ begin
     Result := erClosed;
 end;
 
+function TmnSocket.DoPeek(var Buffer; var Count: Integer): TmnError;
+begin
+  Result := ReceiveData(Buffer, Count, MSG_PEEK);
+end;
+
 function TmnSocket.DoPending: Boolean;
 var
   Count: Cardinal;
@@ -147,7 +153,7 @@ function TmnSocket.DoShutdown(How: TmnSocketStates): TmnError;
 var
   c: Integer;
   iHow: Integer;
-  //errno: longint;
+  errno: longint;
 begin
   if [sdReceive, sdSend] = How then
     iHow := SD_BOTH
@@ -163,7 +169,7 @@ begin
 
   //CheckActive;
   c := WinSock2.Shutdown(FHandle, iHow);
-  //errno := WSAGetLastError;
+  errno := WSAGetLastError;
   if c = SOCKET_ERROR then
     Result := erInvalid
   else
@@ -183,36 +189,8 @@ begin
 end;
 
 function TmnSocket.DoReceive(var Buffer; var Count: Longint): TmnError;
-var
-  ret: Integer;
-  errno: longint;
 begin
-  ret := WinSock2.recv(FHandle, Buffer, Count, 0);
-  if ret = 0 then
-  begin
-    Count := 0;
-    Result := erClosed;
-  end
-  else if ret = SOCKET_ERROR then
-  begin
-    Count := 0;
-    //CheckError not directly here
-    if soWaitBeforeRead in Options then
-      Result := erInvalid
-    else
-    begin
-      errno := WSAGetLastError(); //not work with OpenSSL because it reset error to 0, now readtimeout in socket options not usefull
-      if errno = WSAETIMEDOUT then
-        Result := erTimeout //the caller will close it depend on options
-      else
-        Result := erInvalid
-    end;
-  end
-  else
-  begin
-    Count := ret;
-    Result := erSuccess;
-  end;
+  Result := ReceiveData(Buffer, Count, 0);
 end;
 
 function TmnSocket.DoSend(const Buffer; var Count: Longint): TmnError;
@@ -280,6 +258,39 @@ begin
   Result := string(s);
 end;
 
+function TmnSocket.ReceiveData(var Buffer; var Count: Longint; vFlag: Integer): TmnError;
+var
+  ret: Integer;
+  errno: longint;
+begin
+  ret := WinSock2.recv(FHandle, Buffer, Count, vFlag);
+  if ret = 0 then
+  begin
+    Count := 0;
+    Result := erClosed;
+  end
+  else if ret = SOCKET_ERROR then
+  begin
+    Count := 0;
+    //CheckError not directly here
+    if soWaitBeforeRead in Options then
+      Result := erInvalid
+    else
+    begin
+      errno := WSAGetLastError(); //not work with OpenSSL because it reset error to 0, now readtimeout in socket options not usefull
+      if errno = WSAETIMEDOUT then
+        Result := erTimeout //the caller will close it depend on options
+      else
+        Result := erInvalid
+    end;
+  end
+  else
+  begin
+    Count := ret;
+    Result := erSuccess;
+  end;
+end;
+
 function TmnSocket.GetLocalAddress: string;
 var
   aName: AnsiString;
@@ -339,13 +350,13 @@ end;
 constructor TmnWallSocket.Create;
 begin
   inherited;
-  Startup;
+  WSAStartup($0202, FWSAData);
 end;
 
 destructor TmnWallSocket.Destroy;
 begin
   inherited;
-  Cleanup;
+  WSACleanup;
 end;
 
 function TmnWallSocket.LookupPort(Port: string): Word;
@@ -376,7 +387,7 @@ procedure TmnWallSocket.Accept(ListenerHandle: TSocketHandle; Options: TmnsoOpti
 var
   aHandle: TSocketHandle;
 begin
-  aHandle := WinSock2.Accept(ListenerHandle, nil, nil);
+  aHandle := TSocketHandle(WinSock2.accept(ListenerHandle, nil, nil)); //* Typecast it because in windows is usigned nativeint
   if aHandle = INVALID_SOCKET then
   begin
     vSocket := nil;
@@ -441,16 +452,19 @@ begin
   end
 end;
 
-procedure TmnWallSocket.Bind(Options: TmnsoOptions; ListenTimeout: Integer; const Port: string; const Address: string; out vSocket: TmnCustomSocket; out vErr: Integer);
+procedure TmnWallSocket.Bind(Options: TmnsoOptions; ListenTimeout: Integer; var Port: string; const Address: string; out vSocket: TmnCustomSocket; out vErr: Integer);
 var
   aHandle: TSocketHandle;
   aSockAddr: {$ifdef FPC}TSockAddr;{$else}TSockAddrIn;{$endif}
   aHostEnt: PHostEnt;
+  l: Integer;
 begin
-  aHandle := socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
+  aHandle := TSocketHandle(socket(PF_INET, SOCK_STREAM, IPPROTO_TCP));
 
   if aHandle <> INVALID_SOCKET then
   begin
+    FillChar(aSockAddr, SizeOf(aSockAddr), #0);
+
     //https://stackoverflow.com/questions/55034112/c-disable-delayed-ack-on-windows
     //aFreq := 1; // can be 1..255, default is 2
     //aErr := ioctlsocket(sock, SIO_TCP_SET_ACK_FREQUENCY, &freq);
@@ -487,6 +501,7 @@ begin
         end;
       end;
     end;
+
     {$IFDEF FPC}
     if WinSock2.bind(aHandle, aSockAddr, SizeOf(aSockAddr)) = SOCKET_ERROR then
     {$ELSE}
@@ -495,7 +510,22 @@ begin
     begin
       vErr := WSAGetLastError;
       FreeSocket(aHandle);
-    end;
+    end
+    else
+    begin
+      // Extract the port number
+      if aSockAddr.sin_port = 0 then
+      begin
+        l := SizeOf(aSockAddr);
+        if WinSock2.getsockname(aHandle, TSockAddr(aSockAddr), l) = SOCKET_ERROR then
+        begin
+          vErr := WSAGetLastError;
+          FreeSocket(aHandle);
+        end
+        else
+          Port := IntToStr(ntohs(aSockAddr.sin_port));
+      end;
+		end;
   end;
 
   if aHandle <> INVALID_SOCKET then
@@ -515,7 +545,7 @@ var
 begin
   //* https://stackoverflow.com/questions/2605182/when-binding-a-client-tcp-socket-to-a-specific-local-port-with-winsock-so-reuse
 
-  aHandle := socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
+  aHandle := TSocketHandle(socket(PF_INET, SOCK_STREAM, IPPROTO_TCP));
   if aHandle <> INVALID_SOCKET then
   begin
     vErr := InitSocketOptions(aHandle, Options, ReadTimeout);
@@ -617,7 +647,7 @@ begin
     vSocket := nil;
 end;
 
-function TmnWallSocket.ResolveIP(Address: string): string;
+function TmnWallSocket.ResolveIP(const Address: string): string;
 var
   aHostAddress: PHostEnt;
   aAddr: {$ifdef FPC}TSockAddr;{$else}TSockAddrIn;{$endif}
@@ -638,26 +668,6 @@ begin
   end
   else
     Result := '';
-end;
-
-procedure TmnWallSocket.Startup;
-var
-  e: Integer;
-begin
-  if FCount = 0 then
-  begin
-    e := WSAStartup($0202, FWSAData);
-    if e <> 0 then
-      raise EmnException.Create('Failed to initialize WinSocket,error #' + IntToStr(e));
-  end;
-  Inc(FCount)
-end;
-
-procedure TmnWallSocket.Cleanup;
-begin
-  Dec(FCount);
-  if FCount = 0 then
-    WSACleanup;
 end;
 
 end.

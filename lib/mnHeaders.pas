@@ -292,9 +292,9 @@ var
 begin
   if Stream <> nil then
   begin
-    while not (cloRead in Stream.Done) do
+    while not (cloRead in Stream.State) do
     begin
-      line := UTF8Decode(Stream.ReadLineUTF8);
+      Stream.ReadUTF8Line(line);
       if line = '' then
         break
       else
@@ -310,7 +310,7 @@ var
   f: TmnHeaderItem;
 begin
   for f in Self do
-    Stream.WriteLineUTF8(f.Collect);
+    Stream.WriteUTF8Line(f.Collect);
 end;
 
 { THeader_ContentType }

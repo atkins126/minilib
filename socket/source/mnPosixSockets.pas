@@ -38,9 +38,12 @@ type
     function DoSelect(Timeout: Integer; Check: TSelectCheck): TmnError; override;
     function DoShutdown(How: TmnSocketStates): TmnError; override;
 
+    function ReceiveData(var Buffer; var Count: Longint; vFlag: Integer): TmnError;
     function InternalSend(vBuf: Pointer; vLen: Integer): Integer;
     function DoListen: TmnError; override;
     function DoReceive(var Buffer; var Count: Longint): TmnError; override;
+    function DoPeek(var Buffer; var Count: Longint): TmnError; override;
+
     function DoSend(const Buffer; var Count: Longint): TmnError; override;
     function DoClose: TmnError; override;
     function DoPending: Boolean; override;
@@ -65,7 +68,7 @@ type
     destructor Destroy; override;
     function GetSocketError(Handle: TSocketHandle): Integer; override;
     procedure Accept(ListenerHandle: TSocketHandle; Options: TmnsoOptions; ReadTimeout: Integer; out vSocket: TmnCustomSocket; out vErr: Integer); override;
-    procedure Bind(Options: TmnsoOptions; ReadTimeout: Integer; const Port: string; const Address: string; out vSocket: TmnCustomSocket; out vErr: Integer); override;
+    procedure Bind(Options: TmnsoOptions; ReadTimeout: Integer; var Port: string; const Address: string; out vSocket: TmnCustomSocket; out vErr: Integer); override;
     procedure Connect(Options: TmnsoOptions; ConnectTimeout, ReadTimeout: Integer; const Port: string; const Address: string; const BindAddress: string; out vSocket: TmnCustomSocket; out vErr: Integer); override;
   end;
 
@@ -211,6 +214,11 @@ begin
     Result := erClosed;
 end;
 
+function TmnSocket.DoPeek(var Buffer; var Count: Longint): TmnError;
+begin
+  Result := ReceiveData(Buffer, Count, Msg_Peek);
+end;
+
 function TmnSocket.DoPending: Boolean;
 var
   Count: Cardinal;
@@ -262,30 +270,8 @@ begin
 end;
 
 function TmnSocket.DoReceive(var Buffer; var Count: Longint): TmnError;
-var
-  ret: Integer;
 begin
-  CheckActive;
-
-  //ret := Posix.SysSocket.Recv(FHandle, Buffer, Count, MSG_NOSIGNAL); //MSG_NOSIGNAL fail on mac and ios :)
-  ret := Posix.SysSocket.Recv(FHandle, Buffer, Count, 0);
-  if ret = 0 then
-  begin
-    Count := 0;
-    Result := erClosed;
-  end
-  else if ret = SOCKET_ERROR then
-  begin
-    Count := 0;
-    //TODO copy it from windows
-    //Result := erTimout; //maybe closed, but we will pass it as timeout, the caller will close it depend on options
-    Result := erInvalid;
-  end
-  else
-  begin
-    Count := ret;
-    Result := erSuccess;
-  end;
+  Result := ReceiveData(Buffer, Count, 0);
 end;
 
 function TmnSocket.DoSend(const Buffer; var Count: Longint): TmnError;
@@ -341,6 +327,33 @@ begin
 
     Inc(Result, aSent);
     Inc(aBuf, aSent);
+  end;
+end;
+
+function TmnSocket.ReceiveData(var Buffer; var Count: Longint; vFlag: Integer): TmnError;
+var
+  ret: Integer;
+begin
+  CheckActive;
+
+  //ret := Posix.SysSocket.Recv(FHandle, Buffer, Count, MSG_NOSIGNAL); //MSG_NOSIGNAL fail on mac and ios :)
+  ret := Posix.SysSocket.Recv(FHandle, Buffer, Count, vFlag);
+  if ret = 0 then
+  begin
+    Count := 0;
+    Result := erClosed;
+  end
+  else if ret = SOCKET_ERROR then
+  begin
+    Count := 0;
+    //TODO copy it from windows
+    //Result := erTimout; //maybe closed, but we will pass it as timeout, the caller will close it depend on options
+    Result := erInvalid;
+  end
+  else
+  begin
+    Count := ret;
+    Result := erSuccess;
   end;
 end;
 
@@ -532,10 +545,11 @@ begin
   end;
 end;
 
-procedure TmnWallSocket.Bind(Options: TmnsoOptions; ReadTimeout: Integer; const Port: string; const Address: string; out vSocket: TmnCustomSocket; out vErr: Integer);
+procedure TmnWallSocket.Bind(Options: TmnsoOptions; ReadTimeout: Integer; var Port: string; const Address: string; out vSocket: TmnCustomSocket; out vErr: Integer);
 var
   aHandle: TSocketHandle;
   aAddr : TSockAddr;
+  l: socklen_t;
 begin
   aHandle := Posix.SysSocket.socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 
@@ -557,7 +571,23 @@ begin
     begin
       vErr := errno; //GetSocketError(aHandle);
       FreeSocket(aHandle);
-    end;
+    end
+    else
+    begin
+      // Extract the port number
+      if aAddr.addr_in.sin_port = 0 then
+      begin
+        l := SizeOf(aAddr);
+        if getsockname(aHandle, aAddr.addr, l) = SOCKET_ERROR then
+        begin
+          vErr := errno; //GetSocketError(aHandle);
+          FreeSocket(aHandle);
+        end
+        else
+          Port := IntToStr(ntohs(aAddr.addr_in.sin_port));
+      end;
+		end;
+
   end;
 
   if aHandle<>INVALID_SOCKET then

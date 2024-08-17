@@ -119,6 +119,7 @@ type
   public
     function Have(AValue: String; vSeparators: TSysCharSet = [';']): Boolean;
     function CreateSubValues(vSeparators: TSysCharSet = [';']): TStringList;
+    function SubValue(const Key: string): string;
   end;
 
 procedure FieldsCallBack(Sender: Pointer; Index:Integer; S: string; var Resume: Boolean);
@@ -164,9 +165,9 @@ begin
   Strings := TmnWrapperStream.Create(Stream, False);
   try
     Clear;
-    while not Strings.EndOfStream do
+    while Strings.Connected do
     begin
-      Line := Strings.ReadLineUTF8;
+      Strings.ReadUTF8Line(Line);
       AddItem(Line, Separator, True);
     end;
   finally
@@ -338,7 +339,8 @@ begin
   try
     while not Strings.EndOfStream do
     begin
-      Line := Trim(Strings.ReadLineUTF8);
+      Strings.ReadUTF8Line(Line);
+      Line := Trim(Line);
       if RightStr(Line, 1) = '.' then
         AddSection(LeftStr(Line, Length(Line) - 1))
       else if LeftStr(Line, 1) = '[' then
@@ -502,9 +504,9 @@ var
 begin
   if Stream <> nil then
   begin
-    while not (cloRead in Stream.Done) do
+    while not (cloRead in Stream.State) do
     begin
-      line := UTF8ToString(Stream.ReadLineUTF8);
+      Stream.ReadUTF8Line(line);
       if line = '' then
         break
       else
@@ -525,7 +527,7 @@ var
   f: TmnField;
 begin
   for f in Self do
-    Stream.WriteLineUTF8(f.AsString);
+    Stream.WriteUTF8Line(f.AsString);
 end;
 
 { TmnFieldHelper }
@@ -534,6 +536,11 @@ function TmnFieldHelper.CreateSubValues(vSeparators: TSysCharSet): TStringList;
 begin
   Result := TStringList.Create;
   StrToStrings(AsString, Result, vSeparators, [' ']);
+end;
+
+function TmnFieldHelper.SubValue(const Key: string): string;
+begin
+  GetSubValue(AsString, Key, Result);
 end;
 
 function TmnFieldHelper.Have(AValue: String; vSeparators: TSysCharSet): Boolean;

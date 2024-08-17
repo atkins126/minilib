@@ -104,12 +104,15 @@ type
     function GetImageIndex: Integer; virtual;
   end;
 
+  TmnrCellAction = TProc<TmnrCell>;
+
   TmnrCell = class(TmnrBaseCell)
   private
     FReference: TmnrReference;
     FDesignCell: TmnrDesignCell;
     FLayout: TmnrLayout;
     FIsNull: Boolean;
+    FAction: TmnrCellAction;
 
     function GetNext: TmnrCell;
     function GetPrior: TmnrCell;
@@ -124,6 +127,7 @@ type
     procedure Created; override;
   public
     function DisplayText: string; override;
+    function ExecuteAction: Boolean;
     function Compare(vCell: TmnrCell): Integer;
     procedure SumCell(vCell: TmnrCell);
     property Layout: TmnrLayout read GetLayout;
@@ -134,6 +138,7 @@ type
     property Prior: TmnrCell read GetPrior;
     property Reference: TmnrReference read FReference;
     property IsNull: Boolean read FIsNull write FIsNull default False;
+    property Action: TmnrCellAction read FAction write FAction;
   end;
 
   TmnrRow = class(TmnrRowNode)
@@ -1149,7 +1154,6 @@ procedure TmnrCustomReport.ExportHTML(const vStream: TStream);
 var
   r: TmnrRow;
   n: TmnrCell;
-  s: TStringBuilder;
   l: TmnrRowList;
 
 begin
@@ -1787,7 +1791,7 @@ end;
 function TmnrSection.DoFetch(var vParams: TmnrFetch): TmnrAcceptMode;
 begin
   vParams.Reset;
-  vParams.Data := Report.RowsData.CreateJsonData;
+  vParams.Data := Report.RowsData.CreateJsonData; //multiline row
 
   if Assigned(FOnFetch) then
     FOnFetch(vParams)
@@ -1810,13 +1814,9 @@ var
   aRow: TmnrRow;
   //c: TmnrCell;
   Accepted: Boolean;
-  i: Integer;
-  p: TJSONPair;
-  c: Integer;
 begin
   //vParams.Data shared for all DesignRows
   vParams.Data.AddPair('ID', vParams.ID);
-  //aRow.JData.AddPair('Number', vParams.Number);
   vParams.Data.AddPair('Locked', vParams.Locked);
   vParams.Data.AddPair('Index', vIndex);
 
@@ -1888,7 +1888,7 @@ end;
 
 function TmnrSection.GetAppendTitlesStored: Boolean;
 begin
-  Result := FAppendReportTotals <> GetAppendTitlesDefault;
+  Result := FAppendReportTitles <> GetAppendTitlesDefault;
 end;
 
 function TmnrSection.GetCaption: string;
@@ -2790,6 +2790,13 @@ begin
   end;
 end;
 
+function TmnrCell.ExecuteAction: Boolean;
+begin
+  Result := Assigned(FAction);
+  if Result then
+    FAction(Self);
+end;
+
 function TmnrCell.GetDesignCell: TmnrDesignCell;
 begin
   Result := FDesignCell;
@@ -3665,7 +3672,8 @@ begin
     try
       for y in l do
       begin
-        if SameText(y.Name, vName) or SameText(y.Name+y.Number.ToString, vName) then //fix for adding number to name 22-11-2022 need back to sametext :)
+        if SameText(y.Name, vName) or ((Pos('.', vName)=0) and SameText(y.Name+y.Number.ToString, vName)) then //fix for adding number to name 22-11-2022 need back to sametext :)
+//        if SameText(y.Name, vName) then
           Exit(y)
       end;
       Result := nil;

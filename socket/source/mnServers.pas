@@ -19,7 +19,7 @@ interface
 
 uses
   Classes, SysUtils,
-  mnUtils, mnOpenSSL,
+  mnUtils, mnOpenSSL, syncobjs,
   mnSockets, mnStreams, mnConnections;
 
 const
@@ -28,7 +28,8 @@ const
 
 type
 
-  { TmnServerSocket }
+{ TmnServerSocket }
+
 {
   TmnServerSocket Class is for beginner to play simple example of socket server, it accept one connection only
   If you want multiple connection, use TmnServer
@@ -48,8 +49,9 @@ type
     procedure FreeSocket; override;
     function CreateSocket(out vErr: Integer): TmnCustomSocket; override;
   public
-    PrivateKeyFile: string;
+    CertPassword: string;
     CertificateFile: string;
+    PrivateKeyFile: string;
     constructor Create(const vAddress, vPort: string; vOptions: TmnsoOptions = [soNoDelay]);
     destructor Destroy; override;
     property Port: string read FPort write SetPort;
@@ -71,6 +73,7 @@ type
   private
     FRemoteIP: string;
     FStream: TmnConnectionStream;
+    FIsSSL: Boolean;
     function GetListener: TmnListener;
   protected
     function GetConnected: Boolean; override;
@@ -84,13 +87,13 @@ type
     property Stream: TmnConnectionStream read FStream;
     property Listener: TmnListener read GetListener;
     property RemoteIP: string read FRemoteIP;
+    property IsSSL: Boolean read FIsSSL;
   end;
 
   TmnServerConnectionClass = class of TmnServerConnection;
 
   TmnOnLog = procedure(const S: string) of object;
   TmnOnListenerNotify = procedure(Listener: TmnListener) of object;
-  TmnOnListenerAcceptNotify = procedure(Listener: TmnListener; vConnection: TmnServerConnection) of object;
 
   { TmnListener }
 
@@ -98,12 +101,11 @@ type
   private
     FServer: TmnServer;
     FTimeout: Integer;
-    FAttempts: Integer;
-    FTries: Integer;
     FSocket: TmnCustomSocket; //Listner socket waiting by call "select"
     FLogMessages: TStringList;
     FOptions: TmnsoOptions;
     FLastCheck: UInt64;
+    FEvent: TEvent;
     function GetConnected: Boolean;
     procedure SetOptions(AValue: TmnsoOptions);
   protected
@@ -117,8 +119,9 @@ type
   protected //OpenSSL
     Context: TContext;
     //You can use full path
-    PrivateKeyFile: string;
+    CertPassword: string;
     CertificateFile: string;
+    PrivateKeyFile: string;
     CertificateFileDate: TDateTime;
 
     procedure Connect;
@@ -128,13 +131,16 @@ type
   protected
     procedure PostLogs; //run in main thread by queue
     procedure PostChanged; //run in main thread by queue
+    procedure PostStarted; //run in main thread by queue
     procedure Changed; virtual;
+    procedure Started; virtual;
 
     procedure Prepare; virtual;
     procedure Execute; override;
     procedure Unprepare; virtual;
     procedure DropConnections; virtual;
     procedure TerminatedSet; override;
+    property Event: TEvent read FEvent;
   public
     constructor Create;
     destructor Destroy; override;
@@ -146,8 +152,6 @@ type
     property Connected: Boolean read GetConnected;
     property Socket: TmnCustomSocket read FSocket;
     property Options: TmnsoOptions read FOptions write SetOptions;
-    //if listener connection down by network it will reconnect again
-    property Attempts: Integer read FAttempts write FAttempts;
     //it is ListenerTimeout not ReadTimeOut
     property Timeout: Integer read FTimeout write FTimeout default cListenerTimeout;
     procedure ReloadContext;
@@ -176,11 +180,12 @@ type
     function GetConnected: Boolean;
   protected
     IsDestroying: Boolean;
+    IsStopping: Boolean;
     function DoCreateListener: TmnListener; virtual;
     function CreateListener: TmnListener; virtual;
     procedure DoLog(const S: string); virtual;
     procedure DoChanged(vListener: TmnListener); virtual;
-    procedure DoAccepted(vListener: TmnListener; vConnection: TmnServerConnection); virtual;
+    procedure DoStarted(vListener: TmnListener); virtual;
     procedure DoIdle; virtual; //no connection found after time out:)
     procedure DoBeforeOpen; virtual;
     procedure DoAfterOpen; virtual;
@@ -189,11 +194,13 @@ type
     procedure DoStart; virtual;
     procedure DoStop; virtual;
     procedure DoCheckSynchronize;
+    procedure WaitStartedEvent;
     //Idle is in Listener thread not in main thread
     procedure Idle(vListener: TmnListener);
   public
-    PrivateKeyFile: string;
+    CertPassword: string;
     CertificateFile: string;
+    PrivateKeyFile: string;
 
     constructor Create;
     procedure BeforeDestruction; override;
@@ -201,8 +208,12 @@ type
     //Server.Log This called from outside of any threads, i mean you should be in the main thread to call it, if not use Listener.Log
     procedure Log(const S: string);
 
-    procedure Start; //alias for Open
-    procedure Stop; //alias for Close
+    procedure Start(WaitToStart: Boolean = False);
+    procedure Restart;
+    procedure Disconnect; //* Disconnect stop listener connection
+    //Stop is always waiting
+    procedure Stop;
+    procedure Wait; deprecated 'Where we use it?';
 
     property Listener: TmnListener read FListener;
     property Count: Integer read GetCount;
@@ -261,11 +272,11 @@ type
     FOnAfterClose: TNotifyEvent;
     FOnLog: TmnOnLog;
     FOnChanged: TmnOnListenerNotify;
-    FOnAccepted: TmnOnListenerAcceptNotify;
+    FOnStarted: TmnOnListenerNotify;
   protected
     procedure DoLog(const S: string); override;
     procedure DoChanged(vListener: TmnListener); override;
-    procedure DoAccepted(vListener: TmnListener; vConnection: TmnServerConnection); override;
+    procedure DoStarted(vListener: TmnListener); override;
     procedure DoBeforeOpen; override;
     procedure DoAfterOpen; override;
     procedure DoBeforeClose; override;
@@ -277,7 +288,7 @@ type
     property OnBeforeClose: TNotifyEvent read FOnBeforeClose write FOnBeforeClose;
     property OnLog: TmnOnLog read FOnLog write FOnLog;
     property OnChanged: TmnOnListenerNotify read FOnChanged write FOnChanged;
-    property OnAccepted: TmnOnListenerAcceptNotify read FOnAccepted write FOnAccepted;
+    property OnStarted: TmnOnListenerNotify read FOnStarted write FOnStarted;
   end;
 
 implementation
@@ -344,13 +355,13 @@ begin
   end;
 end;
 
-procedure TmnEventServer.DoAccepted(vListener: TmnListener; vConnection: TmnServerConnection);
+procedure TmnEventServer.DoStarted(vListener: TmnListener);
 begin
   inherited;
   if not (IsDestroying) then
   begin
-    if Assigned(FOnAccepted) then
-      FOnAccepted(vListener, vConnection);
+    if Assigned(FOnStarted) then
+      FOnStarted(vListener);
   end;
 end;
 
@@ -440,7 +451,7 @@ end;
 
 procedure TmnServerConnection.Execute;
 begin
-  inherited Execute;
+  inherited;
 end;
 
 procedure TmnServer.SetActive(const Value: Boolean);
@@ -462,8 +473,12 @@ begin
   CheckSynchronize
 end;
 
-procedure TmnServer.DoAccepted(vListener: TmnListener; vConnection: TmnServerConnection);
+procedure TmnServer.WaitStartedEvent;
 begin
+  if (Listener <> nil) and (Listener.Event <> nil) then
+  begin
+    Listener.Event.WaitFor();
+  end;
 end;
 
 procedure TmnServer.DoBeforeClose;
@@ -478,7 +493,14 @@ end;
 function TmnServer.GetCount: Integer;
 begin
   if Listener <> nil then
-    Result := Listener.Count
+  begin
+    Listener.Enter;
+    try
+      Result := Listener.Count;
+    finally
+      Listener.Leave;
+    end;
+  end
   else
     Result := 0;
 end;
@@ -510,6 +532,11 @@ begin
   Queue(nil, PostChanged);
 end;
 
+procedure TmnListener.Started;
+begin
+  Queue(PostStarted); //without nil if thread stop delete queue
+end;
+
 procedure TmnListener.Connect;
 var
   aErr: Integer;
@@ -530,9 +557,9 @@ end;
 constructor TmnListener.Create;
 begin
   inherited Create;
+  FEvent := TEvent.Create(nil, False, False, '');
   FreeOnTerminate := False;
   FLogMessages := TStringList.Create;
-  FAttempts := 0;
   FTimeout := cListenerTimeout;
 end;
 
@@ -571,7 +598,7 @@ procedure TmnListener.PostLogs;
 var
   b: Boolean;
   s: String;
-begin
+ begin
   if FServer <> nil then
   repeat
     Enter;
@@ -595,6 +622,7 @@ end;
 destructor TmnListener.Destroy;
 begin
   FreeAndNil(FLogMessages);
+  FreeAndNil(FEvent);
   inherited;
 end;
 
@@ -612,10 +640,15 @@ var
 begin
 
   try
-    FTries := FAttempts;
     Connect;
+//    Log('Server starting at port: ' + FPort);
     if Connected then
+    begin
       Changed;
+      Started;
+      Log('Server started at port: ' + FPort);
+    end;
+    Event.SetEvent;
     while Connected and not Terminated do
     begin
       try
@@ -626,7 +659,6 @@ begin
           begin
             UpdateChanged;
             aSocket.Context := Context;
-            //aSocket.Prepare;
           end
         end
         else
@@ -653,30 +685,29 @@ begin
           begin
 
             //only if we need retry mode, attempt to connect new socket, for 3 times as example, that if socket disconnected for wiered reason
-            if (not Connected) and (FAttempts > 0) and (FTries > 0) then
+            {if (not Connected) and (FAttempts > 0) and (FTries > 0) then
             begin
               FTries := FTries - 1;
               Connect;
-            end; //else we will not continue look at "while" conditions
+            end; //else we will not continue look at "while" conditions}
           end
           else
           begin
+            //check to make this in new thread
+            aConnection := nil;
             try
-              Enter; //because we add connection to a thread list
-              try
-                aConnection := CreateConnection(aSocket) as TmnServerConnection;
-                aConnection.FRemoteIP := aSocket.GetRemoteAddress;
-                //aConnection.Stream.ReadTimeout ////hmmmm
-                //aConnection.Prepare
-                if FServer <> nil then
-                  FServer.DoAccepted(Self, aConnection);
-              finally
-                Leave;
+              aConnection := CreateConnection(aSocket) as TmnServerConnection;
+              aConnection.FRemoteIP := aSocket.GetRemoteAddress;
+              aConnection.FIsSSL := soSSL in aSocket.Options;
+            except
+              on E: Exception do
+              begin
+                Log(E.Message);
+                aConnection := nil;
               end;
-              //Log('Starting: ' + aConnection.ClassName);
-              aConnection.Start; //moved here need some test
-            finally
             end;
+            if aConnection <> nil then
+              aConnection.Start;
           end;
           {w.Stop;
           var i := w.ElapsedMilliseconds;
@@ -696,6 +727,8 @@ begin
     end;
     Unprepare;
     Changed;
+    //for stop trigger too
+    Event.SetEvent;
   except
     on E: Exception  do
     begin
@@ -759,7 +792,7 @@ procedure TmnListener.Prepare;
 begin
   if soSSL in Options then
   begin
-    Context := TContext.Create(TTLS_SSLServerMethod);
+    Context := TContext.Create(TTLS_SSLServerMethod, [coNoCompressing, coServer]);
     ReloadContext;
   end;
 end;
@@ -769,8 +802,15 @@ begin
   if soSSL in Options then
   begin
     FileAge(CertificateFile, CertificateFileDate, True);
-    Context.LoadCertFile(UTF8Encode(CertificateFile));
-    Context.LoadPrivateKeyFile(UTF8Encode(PrivateKeyFile));
+    if SameText(ExtractFileExt(CertificateFile), '.pfx') then
+    begin
+      Context.LoadPFXFile(UTF8Encode(CertificateFile), CertPassword);
+    end
+    else
+    begin
+      Context.LoadFullChainFile(UTF8Encode(CertificateFile));
+      Context.LoadPrivateKeyFile(UTF8Encode(PrivateKeyFile));
+    end;
     Context.CheckPrivateKey; //do not use this
     //Context.SetVerifyNone;
   end;
@@ -793,7 +833,6 @@ begin
     for i := 0 to List.Count - 1 do
     begin
       List[i].FreeOnTerminate := False; //I will kill you
-//      List[i].Terminate;
     end;
   finally
     Leave;
@@ -805,7 +844,7 @@ begin
       aConnection := List[0];
       aConnection.Terminate;
       aConnection.WaitFor;
-      Log('Connection Stopped #' + IntToStr(aConnection.ID));
+      //Log('Connection Stopped #' + IntToStr(aConnection.ID));
       aConnection.Free;
       List.Delete(0);
     end;
@@ -820,7 +859,10 @@ begin
   try
     if Socket <> nil then
     begin
+      {$ifndef MSWINDOWS}
       Socket.Shutdown([sdReceive, sdSend]);//stop the accept from waiting
+      {$endif}
+      Socket.Close;
 
       //in linux close will cause lag on select
       //Shutdown worked in windows
@@ -830,9 +872,9 @@ begin
       Sleep(1); //for breathing signals in system os
 
     end;
-    Log('before finally: TmnListener.TerminatedSet');
+    //Log('before finally: TmnListener.TerminatedSet');
   finally
-    Log('finally: TmnListener.TerminatedSet');
+    //Log('finally: TmnListener.TerminatedSet');
     Leave;
   end;
 end;
@@ -844,8 +886,8 @@ begin
   inherited Create;
   FAddress := '0.0.0.0';
   //FAddress := '';
-  PrivateKeyFile := 'privatekey.pem';
   CertificateFile := 'certificate.pem';
+  PrivateKeyFile := 'privatekey.pem';
   IdleInterval := cIdleInterval;
   FIdleTick := TThread.GetTickCount64;
 end;
@@ -860,6 +902,15 @@ destructor TmnServer.Destroy;
 begin
   Stop;
   inherited;
+
+  //to process all queues like logs
+  //TThread.Synchronize(nil, DoCheckSynchronize);
+end;
+
+procedure TmnServer.Disconnect;
+begin
+  if Listener <> nil then
+    Listener.Disconnect;
 end;
 
 procedure TmnServer.Log(const S: string);
@@ -867,7 +918,13 @@ begin
   DoLog(S);
 end;
 
-procedure TmnServer.Start;
+procedure TmnServer.Restart;
+begin
+  Stop;
+  Start;
+end;
+
+procedure TmnServer.Start(WaitToStart: Boolean);
 begin
   if (FListener = nil) then // if its already active, dont start again
   begin
@@ -882,14 +939,16 @@ begin
         FListener.FAddress := FAddress;
         if UseSSL then
           FListener.FOptions := FListener.FOptions + [soSSL];
-        FListener.PrivateKeyFile := PrivateKeyFile;
         FListener.CertificateFile := CertificateFile;
+        FListener.CertPassword := CertPassword;
+        FListener.PrivateKeyFile := PrivateKeyFile;
 
         FListener.Prepare;
         //FListener.Timeout := 500;
         DoStart;
         FListener.Start;
-        Log('Server starting at port: ' + Port);
+        if WaitToStart then
+          WaitStartedEvent;
         FActive := True;
       except
         FreeAndNil(FListener); //case error because delphi call terminateset on free
@@ -907,26 +966,43 @@ begin
     FServer.DoChanged(Self);
 end;
 
+procedure TmnListener.PostStarted;
+begin
+  if FServer <> nil then
+    FServer.DoStarted(Self);
+end;
+
 procedure TmnServer.Stop;
 begin
   if (FListener <> nil) then
   begin
-    DoBeforeClose;
-    FListener.Terminate;
-    FListener.WaitFor;
-    Log('Listener Stopped');
+    if not IsStopping then
+    begin
+      IsStopping := True;
+      DoBeforeClose;
+      FListener.Terminate;
+      FListener.WaitFor;
+      Log('Server stopping at port: '+ FListener.Port);
 
-    //to process all queues
-    //in case of service ThreadID<>MainThreadID :)
-    TThread.Synchronize(nil, DoCheckSynchronize);
+      //to process all queues
+      //in case of service ThreadID<>MainThreadID :)
+      TThread.Synchronize(nil, DoCheckSynchronize);
 
-    FreeAndNil(FListener);
-    FActive := False;
-    DoAfterClose;
+      FreeAndNil(FListener);
+      FActive := False;
+      DoAfterClose;
+      IsStopping := False;
+      Log('Server stopped');
+    end;
   end;
-  Log('Server stopped');
   DoStop;
   //TThread.Synchronize(nil, DoCheckSynchronize);
+end;
+
+procedure TmnServer.Wait;
+begin
+  if Listener <> nil then
+    Listener.WaitFor;
 end;
 
 function TmnServer.DoCreateListener: TmnListener;
@@ -971,6 +1047,11 @@ end;
 
 procedure TmnServer.DoStart;
 begin
+end;
+
+procedure TmnServer.DoStarted(vListener: TmnListener);
+begin
+
 end;
 
 procedure TmnServer.DoStop;
@@ -1024,14 +1105,14 @@ function TmnServerSocket.CreateSocket(out vErr: Integer): TmnCustomSocket;
 begin
   if soSSL in Options then
   begin
-    FContext := TContext.Create(TTLS_SSLServerMethod);
-    FContext.LoadCertFile(CertificateFile);
+    FContext := TContext.Create(TTLS_SSLServerMethod, [coServer, coNoCompressing]);
+    FContext.LoadFullChainFile(CertificateFile);
     FContext.LoadPrivateKeyFile(PrivateKeyFile);
     FContext.CheckPrivateKey; //do not use this
     //Context.SetVerifyNone;
   end;
 
-  WallSocket.Bind(Options, ReadTimeout, Port, Address, FListenerSocket, vErr);
+  WallSocket.Bind(Options, ReadTimeout, FPort, Address, FListenerSocket, vErr);
   if FListenerSocket <> nil then
   begin
 //    FListenerSocket.Context := FContext;

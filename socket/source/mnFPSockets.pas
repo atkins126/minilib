@@ -60,7 +60,7 @@ type
     destructor Destroy; override;
     function GetSocketError(Handle: TSocketHandle): Integer; override;
     procedure Accept(ListenerHandle: TSocketHandle; Options: TmnsoOptions; ReadTimeout: Integer; out vSocket: TmnCustomSocket; out vErr: Integer); override;
-    procedure Bind(Options: TmnsoOptions; ReadTimeout: Integer; const Port: string; const Address: string; out vSocket: TmnCustomSocket; out vErr: Integer); override;
+    procedure Bind(Options: TmnsoOptions; ReadTimeout: Integer; var Port: string; const Address: string; out vSocket: TmnCustomSocket; out vErr: Integer); override;
     procedure Connect(Options: TmnsoOptions; ConnectTimeout, ReadTimeout: Integer; const Port: ansistring; const Address: AnsiString; const BindAddress: string; out vSocket: TmnCustomSocket; out vErr: Integer); override;
   end;
 
@@ -384,11 +384,12 @@ begin
   end;
 end;
 
-procedure TmnWallSocket.Bind(Options: TmnsoOptions; ReadTimeout: Integer; const Port: string; const Address: string; out vSocket: TmnCustomSocket; out vErr: Integer);
+procedure TmnWallSocket.Bind(Options: TmnsoOptions; ReadTimeout: Integer; var Port: string; const Address: string; out vSocket: TmnCustomSocket; out vErr: Integer);
 var
   aHandle: TSocketHandle;
   aSockAddr : TINetSockAddr;
   aHostEnt: PHostEntry;
+  l: Integer;
 begin
   aHandle := fpsocket(AF_INET, SOCK_STREAM, 0{IPPROTO_TCP});
 
@@ -410,7 +411,22 @@ begin
     begin
       vErr := SocketError;
       FreeSocket(aHandle);
-    end;
+    end
+    else
+    begin
+      // Extract the port number
+      if aSockAddr.sin_port = 0 then
+      begin
+        l := SizeOf(aSockAddr);
+        if fpgetsockname(aHandle, TSockAddr(aSockAddr), l) = SOCKET_ERROR then
+        begin
+          vErr := SocketError;
+          FreeSocket(aHandle);
+        end
+        else
+          Port := IntToStr(ntohs(aSockAddr.sin_port));
+      end;
+		end;
   end;
 
   if aHandle <> INVALID_SOCKET then
@@ -430,6 +446,7 @@ var
   time: ttimeval;
   DW: Integer;
 begin
+  Initialize(aHostAddress);
   //nonblick connect  https://stackoverflow.com/questions/1543466/how-do-i-change-a-tcp-socket-to-be-non-blocking
   //https://stackoverflow.com/questions/14254061/setting-time-out-for-connect-function-tcp-socket-programming-in-c-breaks-recv
   aHandle := fpsocket(AF_INET, SOCK_STREAM, 0{IPPROTO_TCP});
@@ -498,7 +515,7 @@ begin
   end;
 
   if aHandle <> INVALID_SOCKET then
-    vSocket := TmnSocket.Create(aHandle, Options, skClient, String(NetAddrToStr(sockaddr_in(aSockAddr).sin_addr)), aHostName)
+    vSocket := TmnSocket.Create(aHandle, Options, skClient, String(NetAddrToStr(sockaddr_in(aAddr).sin_addr)), aHostName)
   else
     vSocket := nil;
 end;
