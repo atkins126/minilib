@@ -11,7 +11,7 @@ interface
 uses
   Windows, Messages, SysUtils, StrUtils, Classes, Graphics, Controls, Forms, Dialogs, ShellAPI,
   mnOpenSSLUtils, mnOpenSSL, mnLogs, mnOpenSSLAPI,
-  mnModules, mnStreamUtils, mnUtils,
+  mnModules, mnStreamUtils, mnUtils, mnWebElements,
   Registry, IniFiles, StdCtrls, ExtCtrls, mnConnections, mnSockets, mnServers, mnWebModules,
   HomeModules;
 
@@ -123,9 +123,10 @@ begin
 //    aHomeModule.Port := HttpServer.Port;
 //    aHomeModule.AssetsURL := '/' + aHomeModule.AliasName + '/assets/';
     aHomeModule.WebApp.HomePath := IncludePathDelimiter(aHomePath);
+    aHomeModule.WebApp.Assets.AllowIndex := True;
     aHomeModule.HomePath := IncludePathDelimiter(aHomePath);
     aHomeModule.WorkPath := aHomeModule.WebApp.AppPath;
-    aHomeModule.CompactMode := False;
+    aHomeModule.WebApp.CompactMode := False;
     ForceDirectories(aHomeModule.WorkPath + 'cache');
     ForceDirectories(aHomeModule.WorkPath + 'temp');
   end;
@@ -222,7 +223,7 @@ end;
 procedure TMain.Button2Click(Sender: TObject);
 var
 //  HttpClient: TmnHttpClient;
-  MemoryStream: TMemoryStream;
+//  MemoryStream: TMemoryStream;
 begin
 (*  //LogEdit.Lines.Add('Getting from URL ' + HostEdit.Text);
   MemoryStream := TMemoryStream.Create;

@@ -1,3 +1,5 @@
+
+/* version 1.5 */
 "use-strict";
 
 let mnw = {};
@@ -9,8 +11,7 @@ mnw.url = "";
 mnw.pool = [];
 
 mnw.raw_receive = function(msg)
-{
-  console.log(msg);
+{  
   if (msg.charAt(0) === '{')
   {    
     const json = JSON.parse(msg);
@@ -37,8 +38,7 @@ mnw.raw_receive = function(msg)
 }
 
 mnw.raw_send = function(msg) 
-{
-  console.log(msg);
+{  
   this.ws.send(msg);
 }
 
@@ -120,13 +120,28 @@ function reloadElements()
   });
 }
 
-mnw.click = function(event, sender) 
+mnw.click = function(sender, event) 
 {
   const url = sender.getAttribute('href');
   fetch(url)
   .then(response => response.text())
-  .then(data => console.log(data));  
+  .then(data => console.log("Error on click: " + data));
   event.preventDefault();
+  return false;
+}
+
+mnw.action = function(event, url, data) 
+{  
+  //console.log(JSON.stringify(data));
+  fetch(url, {
+    method: 'POST',
+    body: JSON.stringify(data),
+    headers: {
+      'Content-Type': 'application/json'  
+    }
+  })
+  .then(response => response.text())
+  .then(data => console.log("Error in action: "+data));  
   return false;
 }
 
@@ -183,12 +198,52 @@ mnw.showToast = function(content, type = "warning")
   toast.show();
 }
 
-mnw.switch_theme = function(event)
+mnw.init_theme = function()
 {
-  if (document.body.getAttribute('data-bs-theme') == 'dark')
-    document.body.setAttribute('data-bs-theme', 'light');
+  if (!document.body.getAttribute('data-bs-theme'))
+  {
+    let bs_theme = localStorage.getItem('bs-theme');
+    if (bs_theme)
+      document.body.setAttribute('data-bs-theme', bs_theme);
+  }
+
+  if (!document.body.getAttribute('data-bs-zoom'))
+  {
+    let bs_zoom = localStorage.getItem('bs-zoom');
+    if (bs_zoom)
+    document.documentElement.setAttribute('data-bs-zoom', bs_zoom);
+  }
+}
+
+mnw.switch_zoom = function(sender, event) 
+{
+  let bs_zoom = '';
+  if (sender.id == "zoom-large")
+    bs_zoom = 'large';
+  else if (sender.id == "zoom-small")
+    bs_zoom = 'small';
   else
-    document.body.setAttribute('data-bs-theme', 'dark');    
+    bs_zoom = '';
+
+  if (bs_zoom)
+  {
+    document.documentElement.setAttribute('data-bs-zoom', bs_zoom);
+    localStorage.setItem('bs-zoom', bs_zoom);
+  }
+  else
+  {
+    document.documentElement.removeAttribute('data-bs-zoom');
+    localStorage.removeItem('bs-zoom');
+  }
+}
+mnw.switch_theme = function(sender, event)
+{
+  let bs_theme = 'dark';
+  if (document.body.getAttribute('data-bs-theme') == 'dark')
+    bs_theme = 'light';
+
+  document.body.setAttribute('data-bs-theme', bs_theme);
+  localStorage.setItem('bs-theme', bs_theme);
 }
 
 function init()
@@ -213,8 +268,7 @@ function init()
   mnw.interactive = document.body.hasAttribute('data-mnw-interactive');
   if (mnw.interactive)  
     mnw.attach(window.location.href);
-
-
+  
   // JavaScript to toggle dark mode
 }
 
@@ -223,6 +277,10 @@ function finish()
 /*  if (mnw.ws)
     mnw.ws.close();*/
 }
+
+document.addEventListener('DOMContentLoaded', function() {  
+  mnw.init_theme();      
+});
 
 window.addEventListener('load', init);
 window.addEventListener("beforeunload", finish);

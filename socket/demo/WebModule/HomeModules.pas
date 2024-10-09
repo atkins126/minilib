@@ -202,7 +202,7 @@ begin
   inherited;
   RefreshInterval := 5;
   Interactive := True;
-  with TDocument.Create(This) do
+  with Document do
   begin
     Title := 'My Home';
     Direction := dirLeftToRight;
@@ -302,30 +302,24 @@ begin
 
           end;
 
-{$ifdef fpc}
+{$ifdef fpc1}
           with TClockCompose.Create(This) do
           begin
           end;
 {$else}
-          with TCard.Create(This) do
+          with TIntervalCompose.Create(This) do
           begin
-            Anchor := True;
-            Size := szSmall;
-            Caption := 'Login';
-            with TIntervalCompose.Create(This) do
+            Route := 'clock';
+            OnCompose := procedure(Inner: TmnwElement; AResponse: TmnwResponse)
             begin
-              Route := 'clock';
-              OnCompose := procedure(Inner: TmnwElement; AResponse: TmnwResponse)
+              AResponse.ETag := TimeToStr(Now);
+              TParagraph.Create(Inner, TimeToStr(Now));
+              {with TImage.Create(Inner) do
               begin
-                AResponse.ETag := TimeToStr(Now);
-                TParagraph.Create(Inner, TimeToStr(Now));
-                {with TImage.Create(Inner) do
-                begin
-                  Name := 'file_logo';
-        //          Route := 'logo';
-                  Source := IncludeURLDelimiter(Module.HomeURL)+'assets/logo.png';
-                end;}
-              end;
+                Name := 'file_logo';
+      //          Route := 'logo';
+                Source := IncludeURLDelimiter(Module.HomeURL)+'assets/logo.png';
+              end;}
             end;
           end;
 {$endif}
@@ -386,7 +380,7 @@ end;
 procedure TLoginSchema.DoCompose;
 begin
   inherited;
-  with TDocument.Create(This) do
+  with Document do
   begin
     //Name := 'document';
     //Route := 'document';
@@ -395,7 +389,6 @@ begin
 
     with Body do
     begin
-      Theme := 'dark';
       with TComment.Create(This) do
         Comment := 'This is just login page source';
 
@@ -420,11 +413,11 @@ begin
 
       with SideBar do
       begin
-        Shadow := True;
         RenderIt := True;
         with TLink.Create(This, 'http://www.google.com', 'Google') do
         begin
           ClickType := clickNavigate;
+          NoDecoration := True;
         end;
 
         with TMyLink.Create(This, '', 'Home') do
@@ -432,6 +425,7 @@ begin
           Route := 'my_link';
           Location := GetPath;
           ClickType := clickAction;
+          NoDecoration := True;
         end;
       end;
 
@@ -459,7 +453,7 @@ begin
          // ContentAlign := alignCenter;
           with TCard.Create(This) do
           begin
-            Anchor := True;
+            Solitary := True;
             Size := szNormal;
             Caption := 'Login';
 
@@ -518,16 +512,18 @@ begin
 end;
 
 procedure TDemoSchema.DoCompose;
+var
+  i: Integer;
 begin
   inherited;
-  with TDocument.Create(This) do
+  with Document do
   begin
     Title := 'Demo Title';
     Direction := dirLeftToRight;
 
     with Body do
     begin
-      Theme := 'light';
+
       with TComment.Create(This) do
         Comment := 'This is just login page source';
 
@@ -554,25 +550,72 @@ begin
             begin
               Caption := 'Mode';
             end;
+
+            with TDropdown.Create(This) do
+            begin
+              Image.Icon := 'icon mw-font-normal';
+              with TZoomButtons.Create(This) do
+              begin
+                //Caption := 'Font';
+              end;
+            end;
           end;
         end;
       end;
 
       with SideBar do
       begin
-        Shadow := True;
         RenderIt := True;
-        with TLink.Create(This, 'http://www.google.com', 'Google') do
+        with TAccordion.Create(This) do
         begin
-          ClickType := clickNavigate;
+          AlwaysOpen := True;
+          with TBar.Create(This) do
+          begin
+            Padding := 2;
+            with TThemeModeButton.Create(This) do
+            begin
+              Caption := 'Mode';
+            end;
+          end;
+
+          with TAccordionSection.Create(This) do
+          begin
+            Caption := 'Accounts';
+            Expanded := True;
+            //with TAccordionSection.Create(This) do
+            with TLink.Create(This, 'http://www.google.com', 'Google') do
+            begin
+              ClickType := clickNavigate;
+            end;
+
+            with TMyLink.Create(This, '', 'Home') do
+            begin
+              Route := 'my_link';
+              Location := GetPath;
+              ClickType := clickAction;
+            end;
+          end;
+
+          with TAccordionSection.Create(This) do
+          begin
+            Caption := 'Favorites';
+            Expanded := True;
+            with TLink.Create(This, 'http://www.parmaja.org', 'parmaja') do
+            begin
+              ClickType := clickNavigate;
+            end;
+
+            for i := 0 to 20 do
+            begin
+	            with TMyLink.Create(This, '', 'Link'+IntToStr(i)) do
+              begin
+                Location := GetPath;
+                ClickType := clickAction;
+              end;
+            end;
+          end;
         end;
 
-        with TMyLink.Create(This, '', 'Home') do
-        begin
-          Route := 'my_link';
-          Location := GetPath;
-          ClickType := clickAction;
-        end;
       end;
 
       with Main do
@@ -595,14 +638,65 @@ begin
 
         //with TRow.Create(This) do
         begin
+          with TDropdown.Create(This) do
+          begin
+            Caption := 'Font';
+            with TButton.Create(This) do
+            begin
+              Caption := 'A';
+            end;
+
+            with TButton.Create(This) do
+            begin
+              Caption := 'B';
+            end;
+          end;
+
+          with TGroupButtons.Create(This) do
+          begin
+            with TButton.Create(This) do
+            begin
+              Caption := 'A';
+            end;
+
+            with TButton.Create(This) do
+            begin
+              Caption := 'B';
+            end;
+          end;
+
+          with TToolbar.Create(This) do
+          begin
+            with TButton.Create(This) do
+            begin
+              Caption := 'A';
+            end;
+
+            with TButton.Create(This) do
+            begin
+              Caption := 'B';
+            end;
+          end;
+
+          with This.Add<TColumn> do
+          begin
+            Size := 8;
+            with TCard.Create(This) do
+            begin
+              Collapse := True;
+              Size := szVeryLarge;
+              Caption := 'Empty';
+              //Solitary := True;
+            end;
+          end;
 
          // ContentAlign := alignCenter;
           with TCard.Create(This) do
           begin
+            Collapse := True;
             Size := szNormal;
             Caption := 'Login';
-            Collapse := True;
-            Anchor := True;
+            Solitary := True;
 
             with TForm.Create(This) do
             begin
@@ -634,9 +728,10 @@ begin
 
           with TCard.Create(This) do
           begin
-            Size := szNormal;
+            Size := szVeryLarge;
             Caption := 'Task';
-            Anchor := True;
+            Solitary := True;
+            Collapse := True;
 
             with TCollapseCaption.Create(This) do
             begin
@@ -675,7 +770,7 @@ end;
 
 function THomeModule.CreateRenderer: TmnwRenderer;
 begin
-  Result := TmnwBootstrapRenderer.Create(Self, IsLocal);
+  Result := TmnwBootstrapRenderer.Create(Self, WebApp.IsLocal);
 end;
 
 destructor THomeModule.Destroy;

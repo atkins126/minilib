@@ -198,9 +198,14 @@ type
 		ctWebSocket
 	);
 
+  TmodParams = class(TmnFields)
+  public
+//    property Field; default;
+  end;
+
   TmodRequest = class(TmodCommunicate)
   private
-    FParams: TmnFields;
+    FParams: TmodParams;
     FRoute: TmnRoute;
     FPath: String;
     FConnectionType: TConnectionType;
@@ -248,7 +253,7 @@ type
     property Path: String read FPath write FPath;
 
     property Route: TmnRoute read FRoute write FRoute;
-    property Params: TmnFields read FParams;
+    property Params: TmodParams read FParams;
 
     function CollectURI: string;
 
@@ -676,6 +681,7 @@ type
     property Terminated: Boolean read FTerminated;
   end;
 
+function URIDecode(const S: UTF8String): utf8string;
 function ParseRaw(const Raw: String; out Method, Protocol, URI: string): Boolean;
 function ParseURI(const URI: String; out Address, Params: string): Boolean;
 procedure ParseQuery(const Query: String; mnParams: TmnFields);
@@ -686,7 +692,10 @@ function ParseAddress(const Request: string; out URIPath: string; out URIParams:
 procedure ParsePath(const aRequest: string; out Name: string; out URIPath: string; out URIParams: string; URIQuery: TmnParams);
 function FormatHTTPDate(vDate: TDateTime): string;
 function ExtractDomain(const URI: string): string;
+
+function GetSubPath(const Path: string): string;
 function DeleteSubPath(const SubKey, Path: string): string;
+function StartsSubPath(const SubKey, Path: string): Boolean;
 
 function ComposeHttpURL(UseSSL: Boolean; const DomainName: string; const Port: string = ''; const Directory: string = ''): string; overload;
 function ComposeHttpURL(const Protocol, DomainName: string; const Port: string = ''; const Directory: string = ''): string; overload;
@@ -719,6 +728,38 @@ begin
     Result := Result + '/' + Directory;
 end;
 
+function URIDecode(const S: UTF8String): utf8string;
+var
+  c: AnsiChar;
+  D: Ansistring;
+  i: Integer;
+  R: RawByteString;
+begin
+  Result := '';
+  i := Low(S);
+  R := '';
+  while i <= High(S) do
+  begin
+    C := S[i];
+    {if C = '+' then
+    begin
+      R := R + ' ';
+    end
+    else}
+    if C = '%' then
+    begin
+      D := copy(S, i + 1, 2);
+      R := R + AnsiChar(StrToInt('$'+D));
+      inc(i, 2);
+    end
+    else
+      R := R + c;
+    Inc(i);
+  end;
+  //SetCodePage(R, CP_UTF8, False);
+  Result := R;
+end;
+
 function ParseRaw(const Raw: String; out Method, Protocol, URI: string): Boolean;
 var
   aRequests: TStringList;
@@ -729,7 +770,7 @@ begin
     if aRequests.Count > 0 then
       Method := aRequests[0];
     if aRequests.Count > 1 then
-      URI := aRequests[1];
+      URI := URIDecode(aRequests[1]);
     if aRequests.Count > 2 then
       Protocol := aRequests[2];
   finally
@@ -865,12 +906,29 @@ begin
   Result := '';
 end;
 
+function GetSubPath(const Path: string): string;
+begin
+  if StartsText(URLPathDelim, Path) then
+    Result := SubStr(Path, URLPathDelim, 1)
+  else
+    Result := SubStr(Path, URLPathDelim, 0)
+end;
+
+
 function DeleteSubPath(const SubKey, Path: string): string;
 begin
   if StartsText(URLPathDelim, Path) then
     Result := Copy(Path, Length(URLPathDelim) + Length(SubKey) + 1, MaxInt)
   else
-    Result := Copy(Path, Length(SubKey) + 1, MaxInt);;
+    Result := Copy(Path, Length(SubKey) + 1, MaxInt);
+end;
+
+function StartsSubPath(const SubKey, Path: string): Boolean;
+begin
+  if StartsText(URLPathDelim, Path) then
+    Result := StartsStr(Path, URLPathDelim + SubKey)
+  else
+    Result := StartsStr(Path, SubKey);
 end;
 
 { TmodRespond }
@@ -940,7 +998,7 @@ procedure TmodRequest.Created;
 begin
   inherited;
   FRoute := TmnRoute.Create;
-  FParams := TmnFields.Create;
+  FParams := TmodParams.Create;
 end;
 
 destructor TmodRequest.Destroy;
@@ -1681,7 +1739,6 @@ begin
 
   StrToStrings(ARequest.Path, ARequest.Route, ['/']);
 
-
 {  if (ARequest.Address<>'') and (ARequest.Address<>'/') then
   begin
     if StartsText(URLPathDelim, ARequest.Address) then
@@ -2049,6 +2106,9 @@ var
   aCompressClass: TmnCompressStreamProxyClass;
 begin
   inherited;
+
+  if (Header.Field['Content-Length'].IsExists) then
+    ContentLength := Header.Field['Content-Length'].AsInt64;
 
   Cookies.DelimitedText := Header['Cookie'];
 

@@ -107,6 +107,9 @@ function udtStartOfTheYear(const AValue: TDateTime): TDateTime;
 function udtEndOfTheYear(const AValue: TDateTime): TDateTime;
 function udtIncDay(const AValue: TDateTime; const ANumberOfDays: Integer = 1): TDateTime;
 
+function udtTruncSeconds(const AValue: TDateTime): TDateTime;
+
+
 function udtCorrectYear(y: Integer): Integer;
 function udtCurrentMonth: Word;
 function udtSeasonOfDate(Date: TDateTime): Integer;
@@ -126,8 +129,8 @@ function udtHourPeriodToString(vPeriod: Double): String;
 function udtDateToString(DateTime: TDateTime; Options: TUniviersalDateFlags = []): String; overload;
 function udtStringToDate(vStr: String): TDateTime;
 
-procedure udtISOStrToDate(ISODate: String; out Y, M, D, H, N, S: Word; vDateSeparator: Char = '-'; TimeDivider: Char = #0; UseDefault: Boolean = False); overload;
-function udtISOStrToDate(UDS: TUniviersalDateSystem; ISODate: String; vDateSeparator: Char = '-'; TimeDivider: Char = #0; UseDefault: Boolean = False): TDateTime; overload;
+procedure udtISOStrToDate(ISODate: String; out Y, M, D, H, N, S: Word; vDateSeparator: Char = '-'; TimeDivider: Char = #0; UseDefault: Boolean = False); overload; deprecated 'Use in mnUtils';
+function udtISOStrToDate(UDS: TUniviersalDateSystem; ISODate: String; vDateSeparator: Char = '-'; TimeDivider: Char = #0; UseDefault: Boolean = False): TDateTime; overload; deprecated 'Use in mnUtils';
 function udtISOStrToDate(ISODate: String; vDateSeparator: Char= '-'; TimeDivider: Char = #0; UseDefault: Boolean = False): TDateTime; overload;
 
 function udtISOCorrespondStr(DateTime: TDateTime; vDateSeparator: Char = '-'; TimeDivider: Char = ' '; WithTime: Boolean = False): String;
@@ -482,6 +485,14 @@ end;
 function udtIncDay(const AValue: TDateTime; const ANumberOfDays: Integer = 1): TDateTime;
 begin
   Result := IncDay(AValue, ANumberOfDays);
+end;
+
+function udtTruncSeconds(const AValue: TDateTime): TDateTime;
+var
+  LYear, LMonth, LDay, LHour, LMinute, LSecond, LMilliSecond: Word;
+begin
+  DecodeDateTime(AValue, LYear, LMonth, LDay, LHour, LMinute, LSecond, LMilliSecond);
+  Result := EncodeDateTime(LYear, LMonth, LDay, LHour, LMinute, 0, 0);
 end;
 
 procedure udtDecodeDate(UDS: TUniviersalDateSystem; const DateTime: TDateTime; out Year, Month, Day: Word);

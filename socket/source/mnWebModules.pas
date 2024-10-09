@@ -415,38 +415,6 @@ begin
 {$endif}
 end;
 
-function URIDecode(const S: AnsiString; CodePage: Word = CP_UTF8): string;
-var
-  c: AnsiChar;
-  D: Ansistring;
-  i: Integer;
-  R: RawByteString;
-begin
-  Result := '';
-  i := Low(S);
-  R := '';
-  while i <= High(S) do
-  begin
-    C := S[i];
-    {if C = '+' then
-    begin
-      R := R + ' ';
-    end
-    else}
-    if C = '%' then
-    begin
-      D := copy(S, i + 1, 2);
-      R := R + AnsiChar(StrToInt('$'+D));
-      inc(i, 2);
-    end
-    else
-      R := R + c;
-    Inc(i);
-  end;
-  SetCodePage(R, CP_UTF8, False);
-  Result := R;
-end;
-
 { TmodHttpRespond }
 
 procedure TmodHttpRespond.Created;
@@ -1092,7 +1060,6 @@ end;
 procedure TmodWebModules.ParseHead(ARequest: TmodRequest; const RequestLine: string);
 begin
   inherited;
-  ARequest.URI := URIDecode(ARequest.URI);
   //ARequest.ParsePath(ARequest.URI); duplicate in parse head :)
   ARequest.Command := ARequest.Method;
 end;

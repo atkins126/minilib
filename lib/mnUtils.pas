@@ -162,8 +162,14 @@ function EncloseStr(const S, Left, Right: string): string;
 function RepeatString(const Str: string; Count: Integer): string;
 
 function ConcatString(const S1, Delimiter: string; const S2: string = ''): string; overload;
-function CollectStrings(Strings: TStrings; Delimiter: Char = ','; TrailingChar: Char = #0): string; overload;
-function CollectStrings(Strings: array of string; Delimiter: Char = ','; TrailingChar: Char = #0): string; overload;
+
+//TODO options, to include null
+
+type
+  TCollectStringsOptions = set of (collectNulls, collectTrim);
+
+function CollectStrings(const Strings: array of string; Delimiter: string = ','; Options: TCollectStringsOptions = [collectTrim]): string; overload;
+function CollectStrings(Strings: TStrings; Delimiter: string = ','; Options: TCollectStringsOptions = [collectTrim]): string; overload;
 
 function ReversePos(const SubStr, S : String): Integer; overload;
 function ReversePos(const SubStr, S: String; const Start: Integer): Integer; overload;
@@ -252,8 +258,9 @@ function GetFormatSettings: TFormatSettings;
 procedure ISOStrToDate(ISODate: String; out Y, M, D, H, N, S: Word; vDateSeparator: Char = '-'; TimeDivider: Char = #0; UseDefault: Boolean = False); overload;
 function ISOStrToDate(ISODate: String; vDateSeparator: Char = '-'; TimeDivider: Char = #0; UseDefault: Boolean = False): TDateTime; overload;
 
-function ISODateToStr(DateTime: TDateTime; vDateSeparator: Char = '-'; TimeDivider: Char = ' '; WithTime: Boolean = False): String; overload;
 function ISODateToStr(DateTime: TDateTime; vDateSeparator: Char = '-'; TimeDivider: Char = ' '; TimeSeparator: Char = ':'; WithTime: Boolean = False): String; overload;
+function ISODateTimeToStr(DateTime: TDateTime; vDateSeparator: Char = '-'; TimeDivider: Char = ' '): String; overload;
+
 function DateTimeToRFC822(vDateTime: TDateTime): string;
 
 function IsAllLowerCase(S: string): Boolean;
@@ -478,7 +485,24 @@ begin
   Result := Result + S2;
 end;
 
-function CollectStrings(Strings: TStrings; Delimiter: Char; TrailingChar: Char): string;
+function CollectStrings(const Strings: array of string; Delimiter: string; Options: TCollectStringsOptions): string;
+var
+  s: string;
+  i: Integer;
+begin
+  Result := '';
+  for i :=0 to Length(Strings) -1 do
+  begin
+    if collectTrim in Options then
+      s := Trim(Strings[i])
+    else
+      s := Strings[i];
+    if (s <> '') or (collectNulls in Options) then
+      Result := ConcatString(Result, Delimiter, s);
+  end;
+end;
+
+function CollectStrings(Strings: TStrings; Delimiter: string; Options: TCollectStringsOptions): string;
 var
   s: string;
   i: Integer;
@@ -486,24 +510,12 @@ begin
   Result := '';
   for i :=0 to Strings.Count -1 do
   begin
-    s := Trim(Strings[i]);
-    if TrailingChar <> #0 then
-      s := ExcludeTrailing(s, TrailingChar);
-    Result := ConcatString(Result, Delimiter, s);
-  end;
-end;
-
-function CollectStrings(Strings: array of string; Delimiter: Char; TrailingChar: Char): string;
-var
-  s, v: string;
-begin
-  Result := '';
-  for s in Strings do
-  begin
-    v := Trim(s);
-    if TrailingChar <> #0 then
-      v := ExcludeTrailing(v, TrailingChar);
-    Result := ConcatString(Result, Delimiter, v);
+    if collectTrim in Options then
+      s := Trim(Strings[i])
+    else
+      s := Strings[i];
+    if (s <> '') or (collectNulls in Options) then
+      Result := ConcatString(Result, Delimiter, s);
   end;
 end;
 
@@ -1868,6 +1880,11 @@ begin
   end;
 end;
 
+function ISODateTimeToStr(DateTime: TDateTime; vDateSeparator: Char; TimeDivider: Char): String;
+begin
+  Result := ISODateToStr(DateTime, vDateSeparator, TimeDivider, ':',  True);
+end;
+
 function DateTimeToRFC822(vDateTime: TDateTime): string;
 const
   MonthNames: array[1..12] of String =
@@ -1884,11 +1901,6 @@ var
 begin
   DecodeDate(vDateTime, aYear, aMonth, aDay);
   Result := DayNames[DayOfWeek(vDateTime)] +', ' + IntToStr(aDay) +' ' + MonthNames[aMonth] + ' ' + FormatDateTime('yyyy hh":"nn":"ss', vDateTime) +' ' + '+000';
-end;
-
-function ISODateToStr(DateTime: TDateTime; vDateSeparator: Char; TimeDivider: Char; WithTime: Boolean): String;
-begin
-  Result := ISODateToStr(DateTime, vDateSeparator, TimeDivider, ':',  WithTime);
 end;
 
 //* thanks to https://stackoverflow.com/a/41726706/585304
