@@ -3,7 +3,7 @@ program Universal;
 {$mode objfpc}{$H+}
 
 uses
-  //{.$ifdef DEBUG}heaptrc,{$endif}
+//  {$ifdef DEBUG}heaptrc,{$endif}
   {$IFDEF UNIX}{$IFDEF UseCThreads}
   cthreads,
   {$ENDIF}{$ENDIF}
@@ -21,9 +21,11 @@ begin
   SetHeapTraceOutput('heap.trc');
 {$endif}
 *)
+
+  GlobalSkipIfNoLeaks := True;
   RequireDerivedFormResource :=True;
-  Application.Title :='Universal';
-  Application.Scaled :=True;
+  Application.Title:='Universal';
+  Application.Scaled:=True;
   Application.Initialize;
   Application.CreateForm(TMainForm, MainForm);
   Application.Run;

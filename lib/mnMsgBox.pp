@@ -410,7 +410,9 @@ begin
     Result := DefaultChoice;
 end;
 
-function TMsgBox.ShowInput(var Answer: string; const vText: string; Choices: TmsgChoices; DefaultChoice: TmsgChoice; CancelChoice: TmsgChoice; Kind: TmsgKind): TmsgChoice;
+function TMsgBox.ShowInput(var Answer: string; const vText: string;
+  Choices: TmsgChoices; DefaultChoice: TmsgChoice; CancelChoice: TmsgChoice;
+  Kind: TmsgKind): TmsgChoice;
 begin
   if CancelChoice = msgcUnknown then
     CancelChoice := DefaultChoice;
@@ -430,7 +432,9 @@ begin
     Result := DefaultChoice;
 end;
 
-function TMsgBox.ShowInput(var Answer: string; const vText: string; Choices: array of TmsgSelect; DefaultChoice: Integer; CancelChoice: Integer; Kind: TmsgKind): Integer;
+function TMsgBox.ShowInput(var Answer: string; const vText: string;
+  Choices: array of TmsgSelect; DefaultChoice: Integer; CancelChoice: Integer;
+  Kind: TmsgKind): Integer;
 begin
   if CancelChoice < 0 then
     CancelChoice := DefaultChoice;
@@ -590,7 +594,9 @@ begin
   end;
 end;
 
-function TMsgConsole.ShowInput(var Answer: string; const vText: string; Choices: array of TmsgSelect; DefaultChoice: Integer; CancelChoice: Integer; Kind: TmsgKind): Integer;
+function TMsgConsole.ShowInput(var Answer: string; const vText: string;
+  Choices: array of TmsgSelect; DefaultChoice: Integer; CancelChoice: Integer;
+  Kind: TmsgKind): Integer;
 {var
   OldMode: Cardinal;}
 begin
