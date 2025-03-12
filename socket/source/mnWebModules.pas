@@ -225,16 +225,15 @@ type
 
   TmodWebServer = class(TmodCustomWebServer)
   protected
-  public
-    constructor Create; override;
+    procedure Created; override;
   end;
 
   { TmodAcmeChallengeServer }
 
   TmodAcmeChallengeServer = class(TmodCustomWebServer)
   protected
-  public
-    constructor Create; override;
+    procedure Created; override;
+
   end;
 
   {$ifndef FPC}
@@ -561,7 +560,7 @@ var
   i: Integer;
   aFile: string;
 begin
-  //TODO baaad you need to luck before access
+  //TODO baaad you need to lock before access
   vRoot := IncludePathDelimiter(vRoot);
   for i := 0 to Module.DefaultDocument.Count - 1 do
   begin
@@ -641,6 +640,11 @@ begin
   '/web/dashbord/index.html' file
 
 *)
+  if (Request.Path='')and(Request.URI='/favicon.ico') then
+  begin
+    RespondDocument('favicon.ico', Result);
+    Exit;
+  end;
 
   aHomePath := ExcludePathDelimiter(Respond.HomePath);
 
@@ -795,18 +799,19 @@ end;
 
 { TmodWebServer }
 
-constructor TmodWebServer.Create;
+procedure TmodWebServer.Created;
 begin
   inherited;
   TmodWebFileModule.Create('web', 'doc', ['http/1.1'], Modules);
   Port := '80';
+
 end;
 
 { TmodAcmeChallengeServer }
 
-constructor TmodAcmeChallengeServer.Create;
+procedure TmodAcmeChallengeServer.Created;
 begin
-  inherited Create;
+  inherited;
   AddAcmeChallenge;
 end;
 
