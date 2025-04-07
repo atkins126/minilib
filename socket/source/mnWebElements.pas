@@ -546,8 +546,9 @@ type
   end;
 
   TmnwSchamaCapability = (
+    schemaStartup, //* Create it when registered
     schemaSession,
-    schemaPermanent, //not deleted when restart server
+    schemaPermanent, //* Not deleted when restart server
     schemaDynamic  //* dynamic, do not add it to the list, not cached, becareful
   );
 
@@ -579,6 +580,7 @@ type
     Usage: Integer;
     procedure UpdateAttached;
     function GetDefaultDocument(vRoot: string): string; virtual;
+    class procedure Registered; virtual;
     procedure DoRespond(const AContext: TmnwContext; AResponse: TmnwResponse); override;
     procedure DoAccept(var Resume: Boolean); virtual;
     procedure ProcessMessage(const s: string);
@@ -799,11 +801,12 @@ type
     procedure Start;
     procedure Stop;
 
-    procedure RegisterSchema(const AName: string; SchemaClass: TmnwSchemaClass);
+    function RegisterSchema(const AName: string; SchemaClass: TmnwSchemaClass): TmnwSchema;
     property Registered: TRegisteredSchemas read FRegistered;
 
     function FindBy(const aSchemaName: string; const aSessionID: string): TmnwSchema;
-    function CreateSchema(const aSchemaName: string): TmnwSchema;
+    function CreateSchema(const aSchemaName: string; Fallback: Boolean =  False): TmnwSchema; overload;
+    function CreateSchema(const SchemaClass: TmnwSchemaClass; AName: string; Fallback: Boolean =  False): TmnwSchema; overload;
     function ReleaseSchema(const aSchemaName: string; aSessionID: string): TmnwSchema;
     function GetElement(var AContext: TmnwContext; out Schema: TmnwSchema; out Element: TmnwElement): Boolean;
 
@@ -2669,7 +2672,7 @@ end;
 
 procedure TmnwApp.Start;
 begin
-
+  FShutdown := False;
   FAssets.Prepare;
 end;
 
@@ -2679,7 +2682,7 @@ begin
   ClearSchemas;
 end;
 
-procedure TmnwApp.RegisterSchema(const AName: string; SchemaClass: TmnwSchemaClass);
+function TmnwApp.RegisterSchema(const AName: string; SchemaClass: TmnwSchemaClass): TmnwSchema;
 var
   aSchemaItem: TmnwSchemaItem;
 begin
@@ -2687,6 +2690,15 @@ begin
   aSchemaItem.Name := AName;
   aSchemaItem.SchemaClass := SchemaClass;
   Registered.Add(aSchemaItem);
+  aSchemaItem.SchemaClass.Registered;
+  if schemaStartup in aSchemaItem.SchemaClass.GetCapabilities then
+  begin
+    Result := CreateSchema(SchemaClass, AName);
+    Result.FPhase := scmpNormal;
+    Add(Result);
+  end
+  else
+    Result := nil;
 end;
 
 function TmnwApp.FindBy(const aSchemaName: string; const aSessionID: string): TmnwSchema;
@@ -2703,14 +2715,14 @@ begin
   end;
 end;
 
-function TmnwApp.CreateSchema(const aSchemaName: string): TmnwSchema;
+function TmnwApp.CreateSchema(const aSchemaName: string; Fallback: Boolean =  False): TmnwSchema;
 var
   SchemaItem: TmnwSchemaItem;
 begin
 	SchemaItem := Registered.Find(aSchemaName);
   if SchemaItem <> nil then
   begin
-    Result := SchemaItem.SchemaClass.Create(Self, SchemaItem.Name, SchemaItem.Name);
+    Result := CreateSchema(SchemaItem.SchemaClass, SchemaItem.Name, Fallback);
     SchemaCreated(Result);
     //Add(SchemaObject); no, when compose it we add it
   end
@@ -2749,37 +2761,55 @@ begin
   try
     StrToStrings(AContext.Route, Routes, ['/']);
     if (Routes.Count > 0) then
-    begin
-      aSchemaName := Routes[0];
-      Routes.Delete(0);
-      AContext.Route := DeleteSubPath(aSchemaName, AContext.Route);
-      Lock.Enter;
-      try
-        Schema := FindBy(aSchemaName, AContext.SessionID);
-			finally
-        Lock.Leave;
-      end;
+      aSchemaName := Routes[0]
+    else
+      aSchemaName := '';
 
+    Lock.Enter;
+    try
+      Schema := FindBy(aSchemaName, AContext.SessionID);
+      if Schema = nil then //* Fallback
+      begin
+        Schema := FindBy('', AContext.SessionID);
+        if Schema <> nil then
+          aSchemaName := '';
+      end;
+    finally
+      Lock.Leave;
+    end;
+
+    if Schema = nil then // Not cached, create it.
+    begin
+      Schema := CreateSchema(aSchemaName);
       if Schema = nil then
       begin
-        Schema := CreateSchema(aSchemaName);
-        if (Schema <> nil) and (schemaSession in Schema.GetCapabilities) then
-          Schema.SessionID := AContext.SessionID;
-      end;
-
-      if Schema = nil then
-        Schema := First; //* fallback //taskeej
-
-      Lock.Enter;
-      try
+        Schema := CreateSchema('');
         if Schema <> nil then
-          Inc(Schema.Usage);
-			finally
-        Lock.Leave;
+          aSchemaName := '';
       end;
-    end
-    else
-      Schema := nil;
+
+      if (Schema <> nil) and (schemaSession in Schema.GetCapabilities) then
+        Schema.SessionID := AContext.SessionID;
+    end;
+
+{
+    if Schema = nil then
+      Schema := First; //* fallback //taskeej
+}
+    if aSchemaName <> '' then
+      if (Routes.Count > 0) then
+      begin
+        Routes.Delete(0);
+        AContext.Route := DeleteSubPath(aSchemaName, AContext.Route);
+      end;
+
+    Lock.Enter;
+    try
+      if Schema <> nil then
+        Inc(Schema.Usage);
+    finally
+      Lock.Leave;
+    end;
 
     if (Schema <> nil) then
     begin
@@ -2996,11 +3026,12 @@ end;
 procedure TmnwApp.Created;
 begin
   inherited;
-  RegisterSchema('assets', TAssetsSchema);
+  FAssets := RegisterSchema('assets', TAssetsSchema) as TAssetsSchema;
+end;
 
-  FAssets := CreateSchema('assets') as TAssetsSchema;
-  FAssets.FPhase := scmpNormal;
-  Add(FAssets);
+function TmnwApp.CreateSchema(const SchemaClass: TmnwSchemaClass; AName: string; Fallback: Boolean): TmnwSchema;
+begin
+  Result := SchemaClass.Create(Self, AName, AName);
 end;
 
 procedure TmnwApp.ClearSchemas;
@@ -3938,10 +3969,12 @@ begin
 
           if FileExists(aFileName) and not StartsText('.', ExtractFileName(aFileName)) then //no files starts with dots
           begin
-            AResponse.ContentType := DocumentToContentType(aFileName);
             fs := TFileStream.Create(aFileName, fmShareDenyWrite or fmOpenRead);
             try
-              AContext.Writer.WriteStream(fs, 0);
+              AResponse.ContentLength := GetSizeOfFile(aFileName); //conseder use fs.Size
+              AResponse.ContentType := DocumentToContentType(aFileName);
+              //AContext.Writer.WriteStream(fs, 0);
+              AResponse.SendData(fs, AResponse.ContentLength);
             finally
               fs.Free;
             end;
@@ -3990,6 +4023,10 @@ begin
       Json.Free;
     end;
   end
+end;
+
+class procedure TmnwSchema.Registered;
+begin
 end;
 
 procedure UpdateElement(Element: TmnwElement);
@@ -4912,6 +4949,7 @@ begin
     begin
       if FileExists(aFileName) then
       begin
+        AResponse.ContentLength := GetSizeOfFile(aFileName);
         fs := TFileStream.Create(aFileName, fmShareDenyWrite or fmOpenRead);
         try
           AContext.Writer.WriteStream(fs, 0);
@@ -5887,10 +5925,11 @@ end;
 procedure TAssetsSchema.Created;
 begin
   inherited;
-  Kind := Kind + [elFallback];
+//  Kind := Kind + [elFallback];
   FLogo := THTML.TMemory.Create(This);
   FLogo.Name := 'logo';
   FLogo.Route := 'logo';
+  FPhase := scmpNormal;
   ServeFiles := True;
 end;
 
@@ -5933,7 +5972,7 @@ end;
 class function TAssetsSchema.GetCapabilities: TmnwSchemaCapabilities;
 begin
   Result := inherited;
-  Result := Result + [schemaPermanent];
+  Result := Result + [schemaStartup, schemaPermanent];
 end;
 
 destructor TAssetsSchema.Destroy;

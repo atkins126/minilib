@@ -97,9 +97,6 @@ var
   aDocModule: TmodWebModule;
   aHomeModule: THomeModule;
 begin
-  StartBtn.Enabled := False;
-  StopBtn.Enabled := True;
-
   HttpServer.Port := PortEdit.Text;
   HttpServer.UseSSL := UseSSLChk.Checked;
   if HttpServer.UseSSL then
@@ -127,6 +124,7 @@ begin
     aHomeModule.HomePath := IncludePathDelimiter(aHomePath);
     aHomeModule.WorkPath := aHomeModule.WebApp.AppPath;
     aHomeModule.WebApp.CompactMode := False;
+    aHomeModule.UseCompressing.AsBoolean := False;
     ForceDirectories(aHomeModule.WorkPath + 'cache');
     ForceDirectories(aHomeModule.WorkPath + 'temp');
   end;
@@ -362,6 +360,8 @@ end;
 
 procedure TMain.HttpServerAfterOpen(Sender: TObject);
 begin
+  StartBtn.Enabled := False;
+  StopBtn.Enabled := True;
   if AutoOpenChk.Checked then
     OpenURL;
 end;

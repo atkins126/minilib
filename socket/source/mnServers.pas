@@ -163,6 +163,7 @@ type
     mnServer in the future can manage more than listener
     So put shared info into the Server
   *}
+
   { TmnServer }
 
   TmnServer = class(TmnObject)
@@ -190,11 +191,13 @@ type
     procedure DoStarted(vListener: TmnListener); virtual;
     procedure DoIdle; virtual; //no connection found after time out:)
     procedure DoBeforeOpen; virtual;
+    procedure DoStarting; virtual;
+    procedure DoStart; virtual;
     procedure DoAfterOpen; virtual;
     procedure DoBeforeClose; virtual;
-    procedure DoAfterClose; virtual;
-    procedure DoStart; virtual;
+    procedure DoStopping; virtual;
     procedure DoStop; virtual;
+    procedure DoAfterClose; virtual;
     procedure DoCheckSynchronize;
     procedure WaitStartedEvent;
     //Idle is in Listener thread not in main thread
@@ -225,6 +228,7 @@ type
     property UseSSL: Boolean read FUseSSL write FUseSSL;
 
     property Active: boolean read FActive write SetActive default False;
+    property Started: boolean read FActive write SetActive default False;
     property Logging: Boolean read FLogging write FLogging default false;
     property Connected: Boolean read GetConnected;
     property IdleInterval: Int64 read FIdleInterval write FIdleInterval default cIdleInterval;
@@ -234,6 +238,7 @@ type
 {--------------------------------------------------------------------------------------------------
         Simple Server
 }
+
   TmnServerExecuteProc = procedure(Stream: TmnConnectionStream);
 
   { TmnSimpleServerConnection }
@@ -278,8 +283,8 @@ type
   protected
     procedure DoLog(const S: string); override;
     procedure DoChanged(vListener: TmnListener); override;
-    procedure DoStarted(vListener: TmnListener); override;
     procedure DoBeforeOpen; override;
+    procedure DoStarted(vListener: TmnListener); override;
     procedure DoAfterOpen; override;
     procedure DoBeforeClose; override;
     procedure DoAfterClose; override;
@@ -552,7 +557,7 @@ begin
       Socket.Listen;
     end
     else
-      raise EmnStreamException.CreateFmt('Bind fail [%d]', [aErr]);
+      raise EmnStreamException.CreateFmt('Bind fail [%d] on port %s address %s', [aErr, FPort, FAddress]);
   end;
 end;
 
@@ -641,7 +646,7 @@ var
   aConnection: TmnServerConnection;
   s: string;
 begin
-
+  inherited;
   try
     Connect;
 //    Log('Server starting at port: ' + FPort);
@@ -650,7 +655,8 @@ begin
       Changed;
       Started;
       s := 'Server started at port: ';
-      if soSSL in Options then s := s + 'SSL:';
+      if soSSL in Options then
+        s := s + 'SSL:';
       Log(s + FPort);
     end;
     Event.SetEvent;
@@ -920,7 +926,8 @@ end;
 
 procedure TmnServer.Log(const S: string);
 begin
-  DoLog(S);
+  if Logging then
+    DoLog(S);
 end;
 
 procedure TmnServer.Restart;
@@ -934,9 +941,10 @@ begin
   if (FListener = nil) then // if its already active, dont start again
   begin
     try
+      DoBeforeOpen; //* Init/read/load config values
+      DoStarting; //* more init values from read config
       if UseSSL then
         InitOpenSSL;
-      DoBeforeOpen;
       FListener := CreateListener;
       try
         FListener.FServer := Self;
@@ -959,7 +967,8 @@ begin
         FreeAndNil(FListener); //case error because delphi call terminateset on free
         raise;
       end;
-      DoAfterOpen;
+      if Active then
+        DoAfterOpen;
     finally
     end;
   end;
@@ -985,6 +994,7 @@ begin
     begin
       IsStopping := True;
       DoBeforeClose;
+      DoStopping;
       FListener.Terminate;
       FListener.WaitFor;
       Log('Server stopping at port: '+ FListener.Port);
@@ -1059,7 +1069,15 @@ begin
 
 end;
 
+procedure TmnServer.DoStarting;
+begin
+end;
+
 procedure TmnServer.DoStop;
+begin
+end;
+
+procedure TmnServer.DoStopping;
 begin
 end;
 

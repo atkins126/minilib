@@ -34,7 +34,7 @@
 interface
 
 uses
-  SysUtils, Classes, StrUtils, Types, DateUtils,
+  SysUtils, Classes, StrUtils, Types, DateUtils, ZLib,
   Generics.Defaults, mnStreamUtils, SyncObjs,
   mnClasses, mnStreams, mnFields, mnParams,
   mnSockets, mnConnections, mnServers;
@@ -272,6 +272,14 @@ type
     property ProtcolProxy: TmnProtcolStreamProxy read FProtcolProxy write FProtcolProxy;
   end;
 
+  TStreamPersistWrapper = class(TmnRefInterfacedPersistent, ImnStreamPersist)
+  protected
+    FStream: TStream;
+    procedure SaveToStream(Stream: TStream; Count: Int64);
+  public
+    class function CreateInterface(vStream: TStream): ImnStreamPersist;
+  end;
+
   { TmodRespond }
 
   TmodRespond = class(TmodCommunicate)
@@ -284,6 +292,10 @@ type
     constructor Create(ARequest: TmodRequest); //need trigger event
     function WriteString(const s: string): Boolean;
     function WriteLine(const s: string): Boolean;
+    function SendData(const s: UTF8String): Boolean; overload;
+    function SendData(const s: string): Boolean; overload;
+    function SendData(s: TStream; Count: Int64): Boolean; overload;
+    function SendData(s: ImnStreamPersist; Count: Int64): Boolean; overload;
     property Request: TmodRequest read FRequest;
   end;
 
@@ -303,8 +315,10 @@ type
   private
     function GetAsBoolean: Boolean;
     procedure SetAsBoolean(const Value: Boolean);
+    function GetAsString: String;
   public
     property AsBoolean: Boolean read GetAsBoolean write SetAsBoolean;
+    property AsString: string read GetAsString;
   end;
 
   {
@@ -963,6 +977,95 @@ begin
   inherited;
 end;
 
+function TmodRespond.SendData(s: TStream; Count: Int64): Boolean;
+var
+  aInt: ImnStreamPersist;
+begin
+  aInt := TStreamPersistWrapper.CreateInterface(s);
+  Result := SendData(aInt, Count);
+end;
+
+function TmodRespond.SendData(s: ImnStreamPersist; Count: Int64): Boolean;
+const
+  GzWindowBits                        = 15;
+  GzipWindowBits                      = GzWindowBits + 16;
+  GzipBits: array[Boolean] of integer = (GzWindowBits, GzipWindowBits);
+
+  procedure _SendHeader(ACount: Int64);
+  begin
+    if not (resHeaderSent in  Header.States) then
+    begin
+      AddHeader('Content-Length', ACount.ToString);
+      //Respond.AddHeader('Content-Length', Length(aData).ToString);
+      SendHeader;
+    end;
+  end;
+
+var
+  mStream: TMemoryStream;
+  zStream: TZCompressionStream;
+  aCompress: Boolean;
+begin
+  Result := Count<>0;
+
+  if Count=0 then
+    _SendHeader(0)
+  else
+  begin
+    aCompress := Request.Mode.RespondCompress; //IsGzip
+    if aCompress then
+    begin
+      mStream := TMemoryStream.Create;
+      try
+
+        zStream := TZCompressionStream.Create(mStream, zcDefault, GzipBits[True]);
+        try
+          s.SaveToStream(zStream, Count);
+        finally
+          zStream.Free;
+        end;
+
+        _SendHeader(mStream.Size);
+
+        Request.CompressProxy.Disable; //make unreasonable response when before _SendHeader
+        try
+          Stream.Write(mStream.Memory^, mStream.Size);
+        finally
+          Request.CompressProxy.Enable;
+        end;
+
+      finally
+        mStream.Free;
+      end;
+    end
+    else
+    begin
+      _SendHeader(Count);
+      s.SaveToStream(Self.Stream, Count);
+    end;
+  end;
+end;
+
+function TmodRespond.SendData(const s: UTF8String): Boolean;
+var
+  aStream: TPointerStream;
+begin
+  aStream := TPointerStream.Create(PByte(s), Length(s), True);
+  try
+    Result := SendData(aStream, Length(s));
+  finally
+    aStream.Free;
+  end;
+end;
+
+function TmodRespond.SendData(const s: string): Boolean;
+var
+  t: UTF8String;
+begin
+  t := UTF8Encode(s);
+  Result := SendData(t);
+end;
+
 function TmodRespond.GetStream: TmnBufferStream;
 begin
   Result := FRequest.Stream;
@@ -1186,7 +1289,10 @@ begin
           if Stream.Connected then
           begin
             if (mrKeepAlive in Result.Status) then
-              Stream.ReadTimeout := Result.Timout
+            begin
+              Stream.ReadTimeout := Result.Timout;
+              //Stream.Close([cloWrite]); need flush ???
+            end
             else
               Stream.Disconnect;
           end;
@@ -1356,6 +1462,7 @@ end;
 function TwebCommand.Execute: TmodRespondResult;
 begin
   Result.Status := []; //default to be not keep alive, not sure, TODO
+  Result.Timout := Request.Use.KeepAliveTimeOut; //not sure, TODO
   Prepare(Result);
   try
     RespondResult(Result);
@@ -1553,7 +1660,7 @@ var
   aCommand: TmodCommand;
   aHandled: Boolean;
 begin
-  Result.Status := [mrSuccess];
+  //Result.Status := [mrSuccess];
 
   ARequest.Use.KeepAliveTimeOut := KeepAliveTimeOut;
   ARequest.Use.KeepAlive        := UseKeepAlive;
@@ -1879,6 +1986,7 @@ begin
   InitProtocol;
   if WithHead then
 	  ReceiveHead;
+  Header.Clear;
   Header.ReadHeader(Stream);
   DoHeaderReceived;
 end;
@@ -1977,6 +2085,14 @@ begin
     s := item.GetNameValue(': ');
     Stream.WriteUTF8Line(s);
   end;
+
+  {s := '';
+  for item in Header do
+  begin
+    if s<>'' then s := s + Stream.EndOfLine;
+    s := s + item.GetNameValue(': ');
+  end;
+  Stream.WriteUTF8Line(s);}
 
   DoWriteCookies;
 
@@ -2292,6 +2408,15 @@ begin
   Result := Self <> ovNo;
 end;
 
+function TmodOptionValueHelper.GetAsString: String;
+begin
+  case Self of
+    ovYes: Result := 'Yes';
+    ovNo: Result := 'No';
+    ovUndefined: Result := 'Undefined';
+  end;
+end;
+
 procedure TmodOptionValueHelper.SetAsBoolean(const Value: Boolean);
 begin
   if Value then
@@ -2573,6 +2698,22 @@ begin
   end;
 
   FWaitEvent.WaitFor;
+end;
+
+{ TStreamPersistWrapper }
+
+class function TStreamPersistWrapper.CreateInterface(vStream: TStream): ImnStreamPersist;
+var
+  aObj: TStreamPersistWrapper;
+begin
+  aObj := TStreamPersistWrapper.Create;
+  aObj.FStream := vStream;
+  Result := aObj;
+end;
+
+procedure TStreamPersistWrapper.SaveToStream(Stream: TStream; Count: Int64);
+begin
+  Stream.CopyFrom(FStream, Count);
 end;
 
 initialization
