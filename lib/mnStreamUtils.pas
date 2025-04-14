@@ -18,8 +18,14 @@ unit mnStreamUtils;
 interface
 
 uses
-  Classes, SysUtils, zlib,
+  Classes, SysUtils, zlib, Math,
   mnUtils, mnStreams;
+
+const
+  GzWindowBits                        = 15;
+  GzipWindowBits                      = GzWindowBits + 16;
+  GzipBits: array[Boolean] of integer = (GzWindowBits, GzipWindowBits);
+
 
 type
   { TmnPlainStreamProxy }
@@ -37,9 +43,12 @@ type
   TmnStreamCompress = set of (cprsRead, cprsWrite);
 
   TmnCompressStreamProxy = class abstract(TmnStreamOverProxy)
+  private
+    FLimit: Cardinal;
   public
     constructor Create(ACompress: TmnStreamCompress; Level: TmnCompressLevel = 9); virtual;
     class function GetCompressName: string; virtual; abstract;
+    property Limit: Cardinal read FLimit write FLimit;
   end;
 
   TmnCompressStreamProxyClass = class of TmnCompressStreamProxy;
@@ -61,6 +70,7 @@ type
     DeflateInfo: TInflateInfo;
     InflateInfo: TInflateInfo;
     FBufSize: Cardinal;
+    FLimitRead: Cardinal;
 
   const
     DEF_MEM_LEVEL = 8;
@@ -74,6 +84,8 @@ type
     procedure CloseRead; override;
     function DoRead(var Buffer; Count: Longint; out ResultCount, RealCount: Longint): Boolean; override;
     function DoWrite(const Buffer; Count: Longint; out ResultCount, RealCount: Longint): Boolean; override;
+    procedure CloseFragment; override;
+
   public
     constructor Create(ACompress: TmnStreamCompress; Level: TmnCompressLevel = 9); override;
     destructor Destroy; override;
@@ -216,7 +228,83 @@ type
     class function GetProtocolName: string; override;
   end;
 
+function gzipDecompressStream(inStream, outStream: TStream; Count: Int64): Int64;
+
 implementation
+
+function ZDecompressCheck(code: Integer): Integer; overload;
+begin
+  Result := code;
+  if code < 0 then
+    raise EZDecompressionError.Create(string(_z_errmsg[2 - code])) at ReturnAddress;
+end;
+
+function gzipDecompressStream(inStream, outStream: TStream; Count: Int64): Int64;
+const
+  bufferSize = 32768;
+var
+  zstream: TZStreamRec;
+  zresult: Integer;
+  inBuffer: array[0..bufferSize - 1] of Byte;
+  outBuffer: array[0..bufferSize - 1] of Byte;
+  inSize: Integer;
+  outSize: Integer;
+  remaining: Int64;
+begin
+  Result := 0;
+  FillChar(zstream, SizeOf(TZStreamRec), 0);
+
+  remaining := Count;
+
+  // Initialize decompression
+  ZDecompressCheck(inflateInit2(zstream, GzipBits[True]));
+
+  try
+    // Process data in chunks
+    while (remaining > 0) do
+    begin
+      // Determine how much to read (don't exceed remaining or buffer size)
+      inSize := inStream.Read(inBuffer, Min(bufferSize, remaining));
+      if inSize <= 0 then
+        Break;
+
+      Dec(remaining, inSize);
+
+      zstream.next_in := @inBuffer[0];
+      zstream.avail_in := inSize;
+
+      // Decompress available input
+      repeat
+        zstream.next_out := @outBuffer[0];
+        zstream.avail_out := bufferSize;
+
+        ZDecompressCheck(inflate(zstream, Z_NO_FLUSH));
+
+        outSize := bufferSize - zstream.avail_out;
+        if outSize > 0 then
+          outStream.Write(outBuffer, outSize);
+        Inc(Result, outSize);
+      until (zstream.avail_in = 0) or (zstream.avail_out > 0);
+    end;
+
+    // Finalize decompression
+    repeat
+      zstream.next_out := @outBuffer[0];
+      zstream.avail_out := bufferSize;
+
+      zresult := inflate(zstream, Z_FINISH);
+      if (zresult <> Z_STREAM_END) and (zresult <> Z_OK) then
+        ZDecompressCheck(zresult);
+
+      outSize := bufferSize - zstream.avail_out;
+      if outSize > 0 then
+        outStream.Write(outBuffer, outSize);
+      Inc(Result, outSize);
+    until (zresult = Z_STREAM_END) or (zstream.avail_out > 0);
+  finally
+    inflateEnd(zstream);
+  end;
+end;
 
 { TmnDeflateWriteStreamProxy }
 
@@ -271,7 +359,9 @@ function TmnDeflateStreamProxy.DoRead(var Buffer; Count: Longint; out ResultCoun
 var
   err: Smallint;
   HaveRead: Longint;
+  aSize: Cardinal;
 begin
+  ResultCount := 0;
   if cprsRead in FCompress then
   begin
     //Example https://jigsaw.w3.org/HTTP/ChunkedScript
@@ -288,11 +378,30 @@ begin
         if ZStream.avail_in = 0 then
         begin
           {Refill the buffer.}
-          Over.Read(ZBuffer^, BufSize, HaveRead, RealCount); //BufSize or count ???
-          ZStream.next_in := Pointer(ZBuffer);
-          ZStream.avail_in := HaveRead;
-          if HaveRead=0 then //timeout or disconnected
-            break;
+          if Limit<>0 then
+          begin
+            aSize := FLimit-FLimitRead;
+            //if aSize<=0 then Break;
+            if aSize>BufSize then
+              aSize := BufSize;
+          end
+          else
+            aSize := BufSize;
+
+          if aSize<>0 then
+          begin
+
+            Over.Read(ZBuffer^, aSize, HaveRead, RealCount); //BufSize or count ???
+            ZStream.next_in := Pointer(ZBuffer);
+            ZStream.avail_in := HaveRead;
+            if HaveRead=0 then //timeout or disconnected
+              break;
+
+            if Limit<>0 then
+            begin
+              Inc(FLimitRead, HaveRead);
+            end;
+          end;
         end
         else
           RealCount := 0;
@@ -312,6 +421,18 @@ begin
         end;
       end;
       ResultCount := Count - Integer(ZStream.avail_out);
+
+      if (FLimit<>0) and (ZStream.avail_in=0) then
+      begin
+        if FLimitRead>=FLimit then
+        begin
+          ZEnd := True;
+          CloseFragment;
+          FLimitRead := 0;
+          FLimit := 0;
+        end;
+      end;
+
     end;
     Result := True;
   end
@@ -368,6 +489,12 @@ begin
   end;
 end;
 
+procedure TmnDeflateStreamProxy.CloseFragment;
+begin
+  inherited;
+
+end;
+
 procedure TmnDeflateStreamProxy.CloseInflate;
 begin
   if cprsRead in FCompress then
@@ -420,6 +547,7 @@ begin
 
       ZStream.next_in := Pointer(ZBuffer);
       ZStream.avail_in := 0;
+      FLimitRead := 0;
 
       if FGZip then
         WindowBits := MAX_WBITS + 16
@@ -436,7 +564,8 @@ end;
 constructor TmnDeflateStreamProxy.Create(ACompress: TmnStreamCompress; Level: TmnCompressLevel);
 begin
   inherited Create(ACompress, Level);
-  FBufSize := 16384;
+  //FBufSize := 16384;
+  FBufSize := 4096;
   FLevel := Level;
   FCompress := ACompress;
   FGZip := False;

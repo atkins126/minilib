@@ -79,6 +79,7 @@ type
     procedure ExampleHttpPost;
     procedure ExampleHttpChunked;
     procedure ExampleHttpGz;
+    procedure ExampleHttpGzManual;
     procedure ExampleSocketOpenStreet;
     procedure ExampleHttpEcho;
     procedure ExampleBIOHttpEcho;
@@ -103,6 +104,7 @@ type
     procedure ExampleInflateImage; //Inflate image
     procedure ExampleGZImage; //GZ image
     procedure ExampleGZText; //GZ image
+    procedure ExampleGZTextLimit; //GZ image
     procedure ExampleGZTextWithHeader;
     procedure ExampleUnGZImage; //Unzip GZ image
 
@@ -1083,7 +1085,7 @@ begin
 //    c.UserAgent := 'curl/7.83.1';
     c.Request.UserAgent := 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/113.0';
     c.Request.Use.AcceptCompressing := ovYes;
-    c.Request.Use.KeepAlive := ovNo;
+    c.Request.Use.KeepAlive := ovYes;
 
     c.GetString('http://httpbin.org/gzip', s);
 //    c.GetFile('http://httpbin.org/gzip', Location+'test\file.gz');
@@ -1104,6 +1106,46 @@ begin
 
   finally
     c.Free;
+  end;
+end;
+
+procedure TTestStream.ExampleHttpGzManual;
+var
+  c: TmyHttpClient;
+  s: string;
+  h: TmnField;
+  i: Integer;
+  f: TFileStream;
+begin
+  //https://httpbin.org/get
+  c := TmyHttpClient.Create;
+  f := TFileStream.Create(Location + 'gzip.json', fmCreate or fmOpenWrite);
+  try
+//    c.UserAgent := 'curl/7.83.1';
+    c.Request.UserAgent := 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/113.0';
+    c.Request.Use.AcceptCompressing := ovUndefined;
+    c.Request.Use.KeepAlive := ovNo;
+
+    c.Open('http://httpbin.org/gzip');
+    c.ReceiveStream(f);
+//    c.GetFile('http://httpbin.org/gzip', Location+'test\file.gz');
+    //c.ReadStream(m);
+
+//    Writeln('Result' + c.Respond.StatusCode.ToString);
+    h := nil;
+
+    for h in c.Request.Header do
+      Writeln('<'+h.GetNameValue);
+
+    Writeln('');
+    for h in c.Respond.Header do
+      Writeln('>'+h.GetNameValue);
+
+    Writeln('');
+
+  finally
+    c.Free;
+    f.Free;
   end;
 end;
 
@@ -1478,6 +1520,68 @@ begin
   end;
 end;
 
+procedure TTestStream.ExampleGZTextLimit;
+var
+  cFile: string;
+  aTextFile: TFileStream;
+  aFileStream: TFileStream;
+  Stream: TmnBufferStream;
+  HexProxy: TmnHexStreamProxy;
+  CompressProxy: TmnDeflateStreamProxy;
+  aSize: TFileSize;
+begin
+  cFile := Location + 'test\formdata1.gz';
+  //image.gz is a compressed file of hex file of image
+  WriteLn('Read text to compressed file');
+  aTextFile := TFileStream.Create(Location + 'test\formdata.txt', fmOpenRead);
+  Stream := TmnWrapperStream.Create(TFileStream.Create(cFile, fmCreate or fmOpenWrite));
+  CompressProxy := TmnGzipStreamProxy.Create([cprsRead, cprsWrite], 9);
+  Stream.AddProxy(CompressProxy);
+
+  try
+    WriteLn('Size write: ' + IntToStr(Stream.WriteStream(aTextFile)));
+  finally
+    Stream.Free;
+    FreeAndNil(aTextFile);
+  end;
+  aSize := GetSizeOfFile(cFile);
+
+
+  aTextFile := TFileStream.Create(Location + 'test\formdata.txt', fmOpenRead);
+  aFileStream := TFileStream.Create(cFile, fmOpenWrite);
+  aFileStream.Seek(0, soFromEnd);
+  Stream := TmnWrapperStream.Create(aFileStream);
+
+  CompressProxy := TmnGzipStreamProxy.Create([cprsRead, cprsWrite], 9);
+  Stream.AddProxy(CompressProxy);
+
+  try
+    WriteLn('Size write: ' + IntToStr(Stream.WriteStream(aTextFile)));
+  finally
+    Stream.Free;
+    FreeAndNil(aTextFile);
+  end;
+
+
+//---------------------------------------------------------
+
+  WriteLn('Read compressed file to image');
+  aTextFile := TFileStream.Create(Location + 'test\formdata1_copy.txt', fmCreate or fmOpenWrite);
+  Stream := TmnWrapperStream.Create(TFileStream.Create(cFile, fmOpenRead));
+  CompressProxy := TmnGzipStreamProxy.Create([cprsRead, cprsWrite], 9);
+  Stream.AddProxy(CompressProxy);
+
+  try
+    CompressProxy.Limit := aSize;
+    WriteLn('Size read: ' + IntToStr(Stream.ReadStream(aTextFile, -1)));
+    CompressProxy.Limit := aSize;
+    WriteLn('Size read: ' + IntToStr(Stream.ReadStream(aTextFile, -1)));
+  finally
+    FreeAndNil(Stream);
+    FreeAndNil(aTextFile);
+  end;
+end;
+
 procedure TTestStream.ExampleGzTextWithHeader;
 var
   aTextFile: TFileStream;
@@ -1612,6 +1716,7 @@ begin
       AddProc('[httpclient] Example Http Post', ExampleHttpPost);
       AddProc('[httpclient] Example Http Chunked', ExampleHttpChunked);
       AddProc('[httpclient] Example Http Gz', ExampleHttpGz);
+      AddProc('[httpclient] Example Http Gz Manual', ExampleHttpGzManual);
       AddProc('[httpclient] HTTP Echo', ExampleHttpEcho);
       AddProc('[httpclient] BIO HTTP Echo', ExampleBIOHttpEcho);
       AddProc('[httpclient] Download Cloud Flare', ExampleCloudFlare);
@@ -1639,6 +1744,8 @@ begin
       AddProc('CopyFile Write', CopyFileWrite);
       AddProc('CopyFile Read', CopyFileRead);
       AddProc('GZText: GZ Text', ExampleGZText);
+      AddProc('GZText: GZ Text with limit', ExampleGZTextLimit);
+
       AddProc('GZText: Headered Text', ExampleGzTextWithHeader);
 
       AddProc('[Chunked] Write Chunked lines', ExampleChunkedWrite);

@@ -84,7 +84,7 @@ type
     function ReadStream(AStream: TStream; Count: Integer): TFileSize; overload;
     function ReadToFile(const OutFileName: UTF8String; Count: Integer = -1): TFileSize; overload;
 
-    procedure ReceiveStream(AStream: TStream); overload;
+    function ReceiveStream(AStream: TStream): TFileSize; overload;
     procedure ReceiveMemoryStream(AStream: TStream);
     procedure Disconnect;
 
@@ -514,11 +514,6 @@ begin
   Result := Post(PByte(vData), Length(vData));
 end;
 
-procedure TmnCustomHttpClient.ReceiveStream(AStream: TStream);
-begin
-  ReadStream(AStream);
-end;
-
 function TmnCustomHttpClient.ReadStream(AStream: TStream; Count: Integer): TFileSize;
 begin
   Result := FStream.ReadStream(AStream, Count);
@@ -536,13 +531,21 @@ begin
   end;
 end;
 
+function TmnCustomHttpClient.ReceiveStream(AStream: TStream): TFileSize;
+begin
+  Result := Respond.ReceiveData(AStream);
+end;
+
 function TmnCustomHttpClient.ReadStream(AStream: TStream): TFileSize;
 begin
   if (Request.ChunkedProxy<>nil) and (Respond.ContentLength = 0) then
     Result := FStream.ReadStream(AStream, -1)
   else if (Respond.ContentLength > 0) and Respond.KeepAlive then //Respond.KeepAlive because we cant use compressed with keeplive or contentlength >0
   begin
-    Result := FStream.ReadStream(AStream, Respond.ContentLength);
+    if (Request.CompressProxy<>nil) and (Request.CompressProxy.Limit <> 0) then
+      Result := FStream.ReadStream(AStream, -1)
+    else
+      Result := FStream.ReadStream(AStream, Respond.ContentLength);
   end
   else
     Result := FStream.ReadStream(AStream, -1); //read complete stream

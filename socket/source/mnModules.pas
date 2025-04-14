@@ -34,7 +34,7 @@
 interface
 
 uses
-  SysUtils, Classes, StrUtils, Types, DateUtils, ZLib,
+  SysUtils, Classes, StrUtils, Types, DateUtils, ZLib, 
   Generics.Defaults, mnStreamUtils, SyncObjs,
   mnClasses, mnStreams, mnFields, mnParams,
   mnSockets, mnConnections, mnServers;
@@ -186,10 +186,11 @@ type
     WebSocket: Boolean;
   end;
 
-  TStreamMode = set of (smRequestCompress, smRespondCompress);
+  TStreamMode = set of (smRequestCompress, smRespondCompressing, smAllowCompress);
   TStreamModeHelper = record helper for TStreamMode
     function RequestCompress: Boolean;
-    function RespondCompress: Boolean;
+    function RespondCompressing: Boolean;
+    function AllowCompress: Boolean;
   end;
 
   TConnectionType = (
@@ -276,6 +277,7 @@ type
   protected
     FStream: TStream;
     procedure SaveToStream(Stream: TStream; Count: Int64);
+    procedure LoadFromStream(Stream: TStream; Count: Int64);
   public
     class function CreateInterface(vStream: TStream): ImnStreamPersist;
   end;
@@ -296,6 +298,10 @@ type
     function SendData(const s: string): Boolean; overload;
     function SendData(s: TStream; Count: Int64): Boolean; overload;
     function SendData(s: ImnStreamPersist; Count: Int64): Boolean; overload;
+
+    function ReceiveData(s: TStream): Int64; overload;
+    function ReceiveData(s: ImnStreamPersist; Count: Int64): Int64; overload;
+
     property Request: TmodRequest read FRequest;
   end;
 
@@ -977,6 +983,53 @@ begin
   inherited;
 end;
 
+function TmodRespond.ReceiveData(s: ImnStreamPersist; Count: Int64): Int64;
+var
+  aDecompress: Boolean;
+  mStream: TMemoryStream;
+  zStream: TZDecompressionStream;
+begin
+  aDecompress := (Request.Use.AcceptCompressing in [ovUndefined]) and (Header.Field['Content-Encoding'].Have('gzip', [',']));
+  if aDecompress then
+  begin
+    mStream := TMemoryStream.Create;//duplicate memory avoid this :(
+    try
+      Result := gzipDecompressStream(Stream, mStream, Count);
+      s.LoadFromStream(mStream, Result);
+    finally
+      mStream.Free;
+    end;
+  end
+  else
+  begin
+    s.LoadFromStream(Stream, Count);
+    Result := Count;
+  end;
+end;
+
+function TmodRespond.ReceiveData(s: TStream): Int64;
+var
+  aDecompress: Boolean;
+begin
+  if (Request.ChunkedProxy<>nil) and (ContentLength = 0) then
+    Result := Stream.ReadStream(s, -1)
+  else if (ContentLength > 0) and KeepAlive then //Respond.KeepAlive because we cant use compressed with keeplive or contentlength >0
+  begin
+    if (Request.CompressProxy<>nil) and (Request.CompressProxy.Limit <> 0) then
+      Result := Stream.ReadStream(s, -1)
+    else
+    begin
+      aDecompress := (Request.Use.AcceptCompressing in [ovUndefined]) and (Header.Field['Content-Encoding'].Have('gzip', [',']));
+      if aDecompress then
+        Result := gzipDecompressStream(Stream, s, ContentLength)
+      else
+        Result := Stream.ReadStream(s, ContentLength);
+    end;
+  end
+  else
+    Result := Stream.ReadStream(s, -1); //read complete stream
+end;
+
 function TmodRespond.SendData(s: TStream; Count: Int64): Boolean;
 var
   aInt: ImnStreamPersist;
@@ -986,16 +1039,14 @@ begin
 end;
 
 function TmodRespond.SendData(s: ImnStreamPersist; Count: Int64): Boolean;
-const
-  GzWindowBits                        = 15;
-  GzipWindowBits                      = GzWindowBits + 16;
-  GzipBits: array[Boolean] of integer = (GzWindowBits, GzipWindowBits);
 
   procedure _SendHeader(ACount: Int64);
   begin
     if not (resHeaderSent in  Header.States) then
     begin
-      AddHeader('Content-Length', ACount.ToString);
+      PutHeader('Content-Length', ACount.ToString);
+      PutHeader('Content-Encoding', 'gzip');
+
       //Respond.AddHeader('Content-Length', Length(aData).ToString);
       SendHeader;
     end;
@@ -1012,7 +1063,8 @@ begin
     _SendHeader(0)
   else
   begin
-    aCompress := Request.Mode.RespondCompress; //IsGzip
+    aCompress := Request.Mode.AllowCompress;
+
     if aCompress then
     begin
       mStream := TMemoryStream.Create;
@@ -1027,12 +1079,7 @@ begin
 
         _SendHeader(mStream.Size);
 
-        Request.CompressProxy.Disable; //make unreasonable response when before _SendHeader
-        try
-          Stream.Write(mStream.Memory^, mStream.Size);
-        finally
-          Request.CompressProxy.Enable;
-        end;
+        Stream.Write(mStream.Memory^, mStream.Size);
 
       finally
         mStream.Free;
@@ -2236,7 +2283,6 @@ begin
   KeepAlive := (Use.KeepAlive = ovUndefined) and SameText(Header.ReadString('Connection'), 'Keep-Alive');
   KeepAlive := KeepAlive or ((Use.KeepAlive = ovYes) and not SameText(Header.ReadString('Connection'), 'close'));
 
-
   aChunked := Header.Field['Transfer-Encoding'].Have('chunked', [',']);
 
   {aCompressClass := nil;
@@ -2249,13 +2295,30 @@ begin
   end;
   InitProxies(aChunked, aCompressClass);}
 
+  FMode := [];
+
   if Header.Field['Content-Encoding'].Have('gzip', [',']) then
     FMode := FMode + [smRequestCompress];
 
-  if Use.Compressing.AsBoolean and (Header.Field['Accept-Encoding'].Have('gzip', [','])) then
-    FMode := FMode + [smRespondCompress];
+  if (Header.Field['Accept-Encoding'].Have('gzip', [','])) then
+  begin
+    case Use.Compressing of
+      ovYes:
+      begin
+        if KeepAlive then  //when keep alive we need content length
+          FMode := FMode + [smAllowCompress]
+        else
+          FMode := FMode + [smRespondCompressing];
+      end;
+      ovUndefined: FMode := FMode + [smAllowCompress];
+      else
+      begin
+        //nothing
+      end;
+    end;
+  end;
 
-  if (smRequestCompress in Mode) or (smRespondCompress in Mode) then
+  if (smRequestCompress in Mode) or (smRespondCompressing in Mode) then
   begin
     InitProxies(aChunked, TmnGzipStreamProxy);
     if not (smRequestCompress in Mode) then
@@ -2293,7 +2356,7 @@ begin
       PutHeader('Connection', 'close');
   end;
 
-  if Use.AcceptCompressing = ovYes then
+  if Use.AcceptCompressing in [ovUndefined, ovYes] then
     PutHeader('Accept-Encoding', 'gzip, deflate');
 
   if (Use.Compressing = ovYes) then //to send data by request (post)
@@ -2317,7 +2380,10 @@ begin
   inherited;
 
   if Request.CompressProxy<>nil then
-    Request.CompressProxy.Enabled := smRespondCompress in Request.Mode;
+  begin
+    Request.CompressProxy.Enabled := smRespondCompressing in Request.Mode;
+    Request.CompressProxy.Limit := 0;
+  end;
 end;
 
 procedure TwebRespond.DoHeaderReceived;
@@ -2339,8 +2405,9 @@ begin
     KeepAlive := SameText(Header['Connection'], 'Keep-Alive');
 
   aChunked := Header.Field['Transfer-Encoding'].Have('chunked', [',']);
+
   aCompressClass := nil;
-  if Request.Use.Compressing in [ovUndefined, ovYes] then
+  if Request.Use.AcceptCompressing = ovYes then
   begin
     if Header.Field['Content-Encoding'].Have('gzip', [',']) then
       aCompressClass := TmnGzipStreamProxy
@@ -2349,6 +2416,9 @@ begin
   end;
 
   Request.InitProxies(aChunked, aCompressClass);
+
+  if (aCompressClass<>nil)and KeepAlive then
+    Request.CompressProxy.Limit := ContentLength;
 end;
 
 procedure TwebRespond.DoPrepareHeader;
@@ -2362,8 +2432,8 @@ begin
   if (ETag <> '') then
     PutHeader('ETag', ETag);
 
-  if smRespondCompress in Request.Mode then
-    PutHeader('Content-Encoding', Request.CompressProxy.GetCompressName);
+  if smRespondCompressing in Request.Mode then
+      PutHeader('Content-Encoding', Request.CompressProxy.GetCompressName);
 end;
 
 procedure TwebRespond.DoSendHeader;
@@ -2447,14 +2517,19 @@ end;
 
 { TStreamModeHelper }
 
+function TStreamModeHelper.AllowCompress: Boolean;
+begin
+  Result := smAllowCompress in Self;
+end;
+
 function TStreamModeHelper.RequestCompress: Boolean;
 begin
   Result := smRequestCompress in Self;
 end;
 
-function TStreamModeHelper.RespondCompress: Boolean;
+function TStreamModeHelper.RespondCompressing: Boolean;
 begin
-  Result := smRespondCompress in Self;
+  Result := smRespondCompressing in Self;
 end;
 
 { Pool }
@@ -2709,6 +2784,11 @@ begin
   aObj := TStreamPersistWrapper.Create;
   aObj.FStream := vStream;
   Result := aObj;
+end;
+
+procedure TStreamPersistWrapper.LoadFromStream(Stream: TStream; Count: Int64);
+begin
+  FStream.CopyFrom(Stream,Count);
 end;
 
 procedure TStreamPersistWrapper.SaveToStream(Stream: TStream; Count: Int64);
